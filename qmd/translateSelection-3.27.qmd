@@ -364,7 +364,7 @@ AFFECT [[11806562588218124596]]
 					viewport.requestRepaintDirty();
 				} catch (e5) {
 				}
-				xochitlTranslateSetPopup("", "", "No text selected.", false, false);
+				xochitlTranslateTraceSelection("selection-failed-silent", "reason=" + reason);
 			}
 
 		function xochitlTranslateTraceSelection(event, detail) {
