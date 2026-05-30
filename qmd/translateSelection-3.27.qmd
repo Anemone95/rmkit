@@ -430,17 +430,25 @@ AFFECT [[11806562588218124596]]
 			if (root.document && root.document.id) {
 				return root.document.id;
 			}
-			return "unknown-document";
+			return "";
 		}
 
 		function xochitlTranslateDocumentBasePath() {
-			return "/home/root/.local/share/remarkable/xochitl/" + xochitlTranslateCurrentDocumentId();
+			var documentId = xochitlTranslateCurrentDocumentId();
+			if (documentId.length === 0) {
+				return "";
+			}
+			return "/home/root/.local/share/remarkable/xochitl/" + documentId;
 		}
 
 		function xochitlTranslateDocumentFileType() {
+			var basePath = xochitlTranslateDocumentBasePath();
+			if (basePath.length === 0) {
+				return "";
+			}
 			try {
 				var req = new XMLHttpRequest();
-				req.open("GET", "file://" + xochitlTranslateDocumentBasePath() + ".content", false);
+				req.open("GET", "file://" + basePath + ".content", false);
 				req.send();
 				if (req.status === 0 || req.status === 200) {
 					var content = JSON.parse(req.responseText || "{}");
@@ -450,6 +458,18 @@ AFFECT [[11806562588218124596]]
 				xochitlTranslateTraceSelection("document-type-error", "error=" + e);
 			}
 			return "";
+		}
+
+		function xochitlTranslateDocumentFilePath() {
+			var basePath = xochitlTranslateDocumentBasePath();
+			if (basePath.length === 0) {
+				return "";
+			}
+			var fileType = xochitlTranslateDocumentFileType();
+			if (fileType.length > 0) {
+				return basePath + "." + fileType;
+			}
+			return basePath;
 		}
 
 			function xochitlTranslateTextLayerPageFile() {
@@ -661,7 +681,11 @@ AFFECT [[11806562588218124596]]
 				xochitlTranslateAiXhr = null;
 				xochitlTranslateStatusText = "AI failed: network error.";
 			}
-			xhr.send(JSON.stringify({ prompt: prompt }));
+			xhr.send(JSON.stringify({
+				prompt: prompt,
+				document_id: xochitlTranslateCurrentDocumentId(),
+				document_path: xochitlTranslateDocumentFilePath()
+			}));
 		}
 
 		function xochitlTranslateSubmitFollowup() {

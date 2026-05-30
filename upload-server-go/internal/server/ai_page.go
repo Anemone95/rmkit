@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,8 +10,11 @@ import (
 
 // /ai-page-chat
 //
-// 输入: {"prompt": "...完整 prompt, 客户端已经拼好 (含选中文字等上下文)..."}
+// 输入: {"prompt": "...完整 prompt, 客户端已经拼好 (含选中文字等上下文)...",
+//       "document_id": "...可选 reMarkable 文档 id...",
+//       "document_path": "...可选 /home/root/.local/share/remarkable/xochitl/<id>.<type>..."}
 // 行为: 纯转发, 直接把 prompt 流式调 AI; 不再在服务器端扫描 .rm 文件.
+//       Codex 且带 document_id 时, 服务端会为每个文档持久复用一个 threadId.
 //       (改造前: 客户端只发 prompt_prefix, 服务器扫 .rm 拼整页 text — 但 .rm 不实时刷新,
 //        用户必须等几秒才能点 AI; 改成客户端从 Clipboard 拿选中文字自己拼 prompt 后即时.)
 // 输出: NDJSON 流, 每行一个 JSON 对象:
@@ -21,7 +25,9 @@ import (
 
 func (s *Server) aiPageChat(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Prompt string `json:"prompt"`
+		Prompt       string `json:"prompt"`
+		DocumentID   string `json:"document_id"`
+		DocumentPath string `json:"document_path"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&in); err != nil {
 		httpError(w, http.StatusBadRequest, "JSON 解析失败: "+err.Error())
@@ -30,6 +36,20 @@ func (s *Server) aiPageChat(w http.ResponseWriter, r *http.Request) {
 	in.Prompt = strings.TrimSpace(in.Prompt)
 	if in.Prompt == "" {
 		httpError(w, http.StatusBadRequest, "prompt 不能为空")
+		return
+	}
+	documentID := ""
+	if strings.TrimSpace(in.DocumentID) != "" {
+		var ok bool
+		documentID, ok = normalizeCodexDocumentID(in.DocumentID)
+		if !ok {
+			httpError(w, http.StatusBadRequest, "document_id 无效")
+			return
+		}
+	}
+	documentPath := normalizeCodexDocumentPathForDocument(documentID, in.DocumentPath)
+	if strings.TrimSpace(in.DocumentPath) != "" && documentPath == "" {
+		httpError(w, http.StatusBadRequest, "document_path 无效")
 		return
 	}
 
@@ -55,7 +75,7 @@ func (s *Server) aiPageChat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	err := callAIStream(r.Context(), cfg, in.Prompt, func(chunk string) {
+	err := s.callAIPageStream(r.Context(), cfg, in.Prompt, documentID, documentPath, func(chunk string) {
 		writeLine(map[string]string{"text": chunk})
 	})
 	if err != nil {
@@ -63,4 +83,12 @@ func (s *Server) aiPageChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeLine(map[string]bool{"done": true})
+}
+
+func (s *Server) callAIPageStream(ctx context.Context, cfg aiConfig, prompt, documentID, documentPath string, onChunk func(string)) error {
+	cfg = normalizeAIConfig(cfg)
+	if isCodexKind(cfg.Kind) && documentID != "" {
+		return s.callCodexDocumentStream(ctx, cfg, documentID, documentPath, prompt, onChunk)
+	}
+	return callAIStream(ctx, cfg, prompt, onChunk)
 }

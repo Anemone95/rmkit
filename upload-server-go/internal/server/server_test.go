@@ -23,11 +23,12 @@ func newTestServer(t *testing.T) (*Server, http.Handler, string) {
 	t.Helper()
 	root := t.TempDir()
 	cfg := Config{
-		StaticDir:     filepath.Join(root, "static"),
-		FontsDir:      filepath.Join(root, "fonts"),
-		ScreensDir:    filepath.Join(root, "screens"),
-		DocStagingDir: filepath.Join(root, "staging"),
-		AIConfigPath:  filepath.Join(root, "ai_config.json"),
+		StaticDir:        filepath.Join(root, "static"),
+		FontsDir:         filepath.Join(root, "fonts"),
+		ScreensDir:       filepath.Join(root, "screens"),
+		DocStagingDir:    filepath.Join(root, "staging"),
+		AIConfigPath:     filepath.Join(root, "ai_config.json"),
+		CodexThreadsPath: filepath.Join(root, "codex_threads.json"),
 	}
 	if err := os.MkdirAll(cfg.StaticDir, 0o755); err != nil {
 		t.Fatal(err)

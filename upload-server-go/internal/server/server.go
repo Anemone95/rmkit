@@ -30,6 +30,7 @@ const (
 	MaxUploadBytes   = 200 << 20 // 200 MiB
 	XochitlDir       = "/home/root/.local/share/remarkable/xochitl"
 	AIConfigPath     = "/home/root/.local/share/rmkit-cn/ai_config.json"
+	CodexThreadsPath = "/home/root/.local/share/rmkit-cn/codex_threads.json"
 	AIChatTimeout    = 90 * time.Second
 	LANAccessTTL     = 10 * time.Minute
 )
@@ -42,13 +43,14 @@ var (
 
 // Config 是构造服务器需要的所有可配项.
 type Config struct {
-	StaticDir      string // 静态资源目录 (index.html, qr.html)
-	FontsDir       string // 字体存放目录
-	ScreensDir     string // 锁屏图存放目录
-	DocStagingDir  string // /documents 上传暂存目录 (librarian 会从此处复制)
-	FontsActiveDir string // 字体激活符号链接目录 (~/.local/share/fonts)
-	XochitlConf    string // xochitl 配置路径 (~/.config/remarkable/xochitl.conf)
-	AIConfigPath   string // AI 配置文件路径
+	StaticDir        string // 静态资源目录 (index.html, qr.html)
+	FontsDir         string // 字体存放目录
+	ScreensDir       string // 锁屏图存放目录
+	DocStagingDir    string // /documents 上传暂存目录 (librarian 会从此处复制)
+	FontsActiveDir   string // 字体激活符号链接目录 (~/.local/share/fonts)
+	XochitlConf      string // xochitl 配置路径 (~/.config/remarkable/xochitl.conf)
+	AIConfigPath     string // AI 配置文件路径
+	CodexThreadsPath string // Codex 文档 thread 映射路径
 }
 
 type Server struct {
@@ -60,6 +62,9 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.AIConfigPath == "" {
 		cfg.AIConfigPath = AIConfigPath
+	}
+	if cfg.CodexThreadsPath == "" {
+		cfg.CodexThreadsPath = CodexThreadsPath
 	}
 	for _, d := range []string{cfg.FontsDir, cfg.ScreensDir, cfg.DocStagingDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {

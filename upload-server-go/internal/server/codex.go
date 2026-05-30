@@ -138,11 +138,59 @@ func callCodexStream(ctx context.Context, cfg aiConfig, input codexInput, onChun
 	if err := client.initialize(ctx); err != nil {
 		return err
 	}
-	threadID, err := client.startThread(ctx, cfg)
+	threadID, err := client.startThread(ctx, cfg, true)
 	if err != nil {
 		return err
 	}
 	return client.startTurnAndStream(ctx, cfg, threadID, input, onChunk)
+}
+
+func (s *Server) callCodexDocumentStream(ctx context.Context, cfg aiConfig, documentID, documentPath, prompt string, onChunk func(string)) error {
+	codexAppServerMu.Lock()
+	defer codexAppServerMu.Unlock()
+
+	cfg = normalizeAIConfig(cfg)
+	conn, err := openCodexWebSocket(ctx, cfg.URL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	client := &codexRPCClient{conn: conn}
+	if err := client.initialize(ctx); err != nil {
+		return err
+	}
+
+	rec, err := s.codexThreadForDocument(documentID)
+	if err != nil {
+		return err
+	}
+	threadID := strings.TrimSpace(rec.ThreadID)
+	newThread := false
+	if threadID != "" {
+		if err := client.resumeThread(ctx, cfg, threadID); err != nil {
+			fmt.Fprintf(os.Stderr, "Codex thread/resume doc=%s thread=%s failed: %v\n", documentID, threadID, err)
+			threadID = ""
+		}
+	}
+	if threadID == "" {
+		threadID, err = client.startThread(ctx, cfg, false)
+		if err != nil {
+			return err
+		}
+		newThread = true
+		if err := s.saveCodexThreadForDocument(documentID, codexThreadRecord{
+			ThreadID:     threadID,
+			DocumentPath: documentPath,
+		}); err != nil {
+			return err
+		}
+	}
+
+	if newThread {
+		prompt = codexInitialDocumentPrompt(prompt, documentPath)
+	}
+	return client.startTurnAndStream(ctx, cfg, threadID, codexTextInput(prompt), onChunk)
 }
 
 type codexRPCClient struct {
@@ -214,13 +262,13 @@ func (c *codexRPCClient) initialize(ctx context.Context) error {
 	}
 }
 
-func (c *codexRPCClient) startThread(ctx context.Context, cfg aiConfig) (string, error) {
+func (c *codexRPCClient) startThread(ctx context.Context, cfg aiConfig, ephemeral bool) (string, error) {
 	params := map[string]any{
 		"cwd":              "/home/root",
 		"approvalPolicy":   "never",
 		"sandbox":          "read-only",
 		"serviceName":      "rmkit_cn",
-		"ephemeral":        true,
+		"ephemeral":        ephemeral,
 		"baseInstructions": "你是 reMarkable 本地 AI 助手。只回答用户问题，不运行命令，不修改文件，不解释你的系统环境。默认用中文，除非用户明确要求其它语言。",
 	}
 	if cfg.Model != "" {
@@ -255,6 +303,38 @@ func (c *codexRPCClient) startThread(ctx context.Context, cfg aiConfig) (string,
 				return "", errors.New("Codex thread/start 没有返回 thread id")
 			}
 			return threadID, nil
+		}
+	}
+}
+
+func (c *codexRPCClient) resumeThread(ctx context.Context, cfg aiConfig, threadID string) error {
+	params := map[string]any{
+		"threadId":         threadID,
+		"cwd":              "/home/root",
+		"approvalPolicy":   "never",
+		"sandbox":          "read-only",
+		"baseInstructions": "你是 reMarkable 本地 AI 助手。只回答用户问题，不运行命令，不修改文件，不解释你的系统环境。默认用中文，除非用户明确要求其它语言。",
+	}
+	if cfg.Model != "" {
+		params["model"] = cfg.Model
+	}
+	id, err := c.sendRequest("thread/resume", params)
+	if err != nil {
+		return fmt.Errorf("Codex thread/resume 发送失败: %w", err)
+	}
+	for {
+		msg, err := c.readMessage(ctx)
+		if err != nil {
+			return fmt.Errorf("Codex thread/resume 失败: %w", err)
+		}
+		if err := c.handleServerRequest(msg); err != nil {
+			return err
+		}
+		if msg.ID != nil && *msg.ID == id {
+			if len(msg.Error) > 0 {
+				return fmt.Errorf("Codex thread/resume 错误: %s", snippet(msg.Error))
+			}
+			return nil
 		}
 	}
 }
