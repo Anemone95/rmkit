@@ -526,7 +526,7 @@ AFFECT [[11806562588218124596]]
 					return status + " glyphSelectMode";
 				}
 				xochitlTranslateSidecarPendingSelect = true;
-				xochitlTranslateSetPopup("", "", "Preparing PDF text layer...", true, false);
+				xochitlTranslateTraceSelection("sidecar-prepare-silent", "status=" + status);
 				if (xochitlTranslateSidecarExecutor.running) {
 					xochitlTranslateTraceSelection("sidecar-already-running", "status=" + status);
 					return status + " sidecarAlreadyRunning";
