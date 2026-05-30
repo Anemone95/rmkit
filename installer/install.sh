@@ -25,6 +25,11 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     # 历史 Python IME unit (现已归档到 legacy/ime-py/), 老设备上可能残留, 一并清
     systemctl stop    rmkit-cn-ime.service rmkit-cn-ime-udev.service 2>/dev/null || true
     systemctl disable rmkit-cn-ime.service rmkit-cn-ime-udev.service 2>/dev/null || true
+    for P in /home/root/.local/bin/pdftotext /usr/local/bin/pdftotext; do
+      if [ \"\$(readlink \$P 2>/dev/null || true)\" = \"$REMOTE_BASE/bin/pdftotext\" ]; then
+        rm -f \$P
+      fi
+    done
     rm -rf $REMOTE_BASE
     # 清 upper (overlay 上层 tmpfs) + lower (ext4) 的 unit / drop-in
     mount -o remount,rw / 2>/dev/null || true
@@ -402,6 +407,8 @@ mkdir -p \
   "$PAYLOAD/home/root/rmkit-cn/qmd-src" \
   "$PAYLOAD/home/root/rmkit-cn/compiled-qmd/$FW_VERSION" \
   "$PAYLOAD/home/root/rmkit-cn/static" \
+  "$PAYLOAD/home/root/.local/bin" \
+  "$PAYLOAD/usr/local/bin" \
   "$PAYLOAD/home/root/shims" \
   "$PAYLOAD/home/root/xovi/bergamot/enzh" \
   "$PAYLOAD/home/root/xovi/exthome/appload" \
@@ -432,6 +439,8 @@ export LD_LIBRARY_PATH="/home/root/rmkit-cn/poppler/lib${LD_LIBRARY_PATH:+:$LD_L
 exec /home/root/rmkit-cn/poppler/bin/pdftotext.real "$@"
 EOF
 chmod +x "$PAYLOAD/home/root/rmkit-cn/bin/"*
+ln -sf /home/root/rmkit-cn/bin/pdftotext "$PAYLOAD/home/root/.local/bin/pdftotext"
+ln -sf /home/root/rmkit-cn/bin/pdftotext "$PAYLOAD/usr/local/bin/pdftotext"
 if [ "$ARCH" = "aarch64" ]; then
   cp "$DIST_DIR/poppler-aarch64/bin/pdftotext.real" "$PAYLOAD/home/root/rmkit-cn/poppler/bin/"
   cp "$DIST_DIR"/poppler-aarch64/lib/* "$PAYLOAD/home/root/rmkit-cn/poppler/lib/"

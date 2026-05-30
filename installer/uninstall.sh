@@ -44,6 +44,11 @@ rm -f "$QMD_DIR/advanced_panel.qmd" "$QMD_DIR/language_zh_cn.qmd" \
 mount -o remount,rw / 2>/dev/null || true
 rm -f /usr/share/remarkable/xochitl/translations/reMarkable_zh_CN.qm
 
+for P in /home/root/.local/bin/pdftotext /usr/local/bin/pdftotext; do
+  if [ "$(readlink "$P" 2>/dev/null || true)" = "$RMKIT_DIR/bin/pdftotext" ]; then
+    rm -f "$P"
+  fi
+done
 rm -rf "$RMKIT_DIR"
 
 systemctl daemon-reload
