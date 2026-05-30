@@ -1,0 +1,1601 @@
+; xochitl-translate proof of concept
+; Based on the selection-text paths used by:
+; - rmitchellscott/xovi-qmd-extensions 3.27/tocFromSelection.qmd
+; - ingatellent/xovi-qmd-extensions 3.27/addTagsToContextMenu.qmd
+;
+; This version adds a Translate action. It passes selected text directly into
+; the Local or configured AI backend instead of using a selection handoff file.
+; It also starts Bergamot through qt-command-executor and displays the original
+; plus translated text in an in-document popup.
+; It also adds a toolbar T+cursor button. Pressing that button switches to the
+; selection path and writes:
+;   /tmp/xochitl-translate-debug.txt
+
+AFFECT [[11313888899523275277]]
+    IMPORT [[7082546018834]] 1.0
+    TRAVERSE FocusScope
+        LOCATE AFTER selectSelection
+        INSERT {
+            property string xochitlTranslateBackend: "ai"
+            signal xochitlTranslateSelectTextRequested
+            signal xochitlTranslateSelectTextModeChanged(bool active)
+        }
+    END TRAVERSE
+    TRAVERSE [[8397993708429497603]] > [[6502786168]]#[[233745975898428]] > [[8398044571386570029]]
+        LOCATE AFTER [[7712155293725601]][.[[214634455770]]=`toolbarProvider.editingTools`]
+        INSERT {
+            PenTool {
+                ~&5972374&~: xochitlTranslateToolbarSelect
+                objectName: "xochitlTranslateToolbarSelect"
+                ~&233745975898428&~: ~&6504254477&~
+                pen: ~&6504254477&~.selectionPen
+                penToolType: "selection"
+                ~&8399601734642709923&~: ""
+                ~&6504337259&~: ~&454089850271038938&~.~&6503187275&~.~&14888501028015932088&~
+                implicitlySelected: ~&6504254477&~.selectedPen === xochitlTranslateToolbarSelect
+                minimumFoldoutWidth: 260
+
+                ~&233726547792244&~: ~&6504329801&~
+                ~&233748328658231&~: ~&6504254477&~.~&7712989577739634&~
+                ~&254542236275632405&~: {
+                    var alreadySelected = xochitlTranslateToolbarSelect.selected
+                        || xochitlTranslateToolbarSelect.implicitlySelected
+                        || ~&6504254477&~.selectedPen === xochitlTranslateToolbarSelect;
+                    xochitlTranslateToolbarSelect.writeDebug("toolbar text-select clicked backend=" + ~&6504254477&~.xochitlTranslateBackend + " alreadySelected=" + alreadySelected);
+                    if (alreadySelected) {
+                        ~&6504254477&~.requestPenSelect(xochitlTranslateToolbarSelect, Toolbar.SelectMode.Activate);
+                        return;
+                    }
+                    ~&6504254477&~.selectionPen.tool = Line.SelectionTool;
+                    ~&6504254477&~.requestPenSelect(xochitlTranslateToolbarSelect, Toolbar.SelectMode.DontActivate);
+                    ~&6504254477&~.xochitlTranslateSelectTextModeChanged(true);
+                    ~&6504254477&~.xochitlTranslateSelectTextRequested();
+                }
+
+                function writeDebug(~&233736549263054&~) {
+                    ~&197102514&~ req =  new  XMLHttpRequest();
+                    req.~&6504147419&~("PUT", "file:///tmp/xochitl-translate-debug.txt");
+                    req.~&6504279475&~(~&233736549263054&~ + " selected=" + xochitlTranslateToolbarSelect.selected + " implicit=" + xochitlTranslateToolbarSelect.implicitlySelected);
+                }
+
+                content: Item {
+                    anchors.fill: parent
+
+                    Text {
+                        anchors.centerIn: parent
+                        anchors.horizontalCenterOffset: -5
+                        text: "T"
+                        font.pointSize: 28
+                        color: xochitlTranslateToolbarSelect.selected || xochitlTranslateToolbarSelect.implicitlySelected ? Values.colorWhite : Values.colorBlack
+                    }
+
+                    Text {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        text: ~&6504254477&~.xochitlTranslateBackend === "local" ? "L" : "A"
+                        font.pointSize: 11
+                        font.bold: true
+                        color: xochitlTranslateToolbarSelect.selected || xochitlTranslateToolbarSelect.implicitlySelected ? Values.colorWhite : Values.colorBlack
+                    }
+
+                    Rectangle {
+                        width: 4
+                        height: 34
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.horizontalCenterOffset: 18
+                        color: xochitlTranslateToolbarSelect.selected || xochitlTranslateToolbarSelect.implicitlySelected ? Values.colorWhite : Values.colorBlack
+                    }
+                }
+
+                foldoutContent: ColumnLayout {
+                    spacing: 0
+
+                    ArkControls.FoldoutItem {
+                        label: "AI"
+                        iconSource: "qrc:/icons/sparkles.svg"
+                        selected: ~&6504254477&~.xochitlTranslateBackend === "ai"
+                        antialiasing: ~&6504254477&~.antialiasing
+                        focusPolicy: Qt.NoFocus
+                        Layout.fillWidth: true
+                        onClicked: {
+                            ~&6504254477&~.xochitlTranslateBackend = "ai";
+                            xochitlTranslateToolbarSelect.foldout.visible = false;
+                            xochitlTranslateToolbarSelect.writeDebug("toolbar backend selected ai");
+                        }
+                    }
+
+                    ArkControls.FoldoutItem {
+                        label: "Local"
+                        iconSource: "qrc:/ark/icons/list"
+                        selected: ~&6504254477&~.xochitlTranslateBackend === "local"
+                        antialiasing: ~&6504254477&~.antialiasing
+                        focusPolicy: Qt.NoFocus
+                        Layout.fillWidth: true
+                        onClicked: {
+                            ~&6504254477&~.xochitlTranslateBackend = "local";
+                            xochitlTranslateToolbarSelect.foldout.visible = false;
+                            xochitlTranslateToolbarSelect.writeDebug("toolbar backend selected local");
+                        }
+                    }
+                }
+            }
+        }
+    END TRAVERSE
+    TRAVERSE FocusScope
+        LOCATE AFTER selectedPen
+        INSERT {
+            Connections {
+                target: root
+                function onSelectedPenChanged() {
+                    if (root.selectedPen && root.selectedPen.objectName !== "xochitlTranslateToolbarSelect") {
+                        root.selectionPen.tool = Line.SelectionTool;
+                        root.xochitlTranslateSelectTextModeChanged(false);
+                    }
+                }
+            }
+        }
+    END TRAVERSE
+END AFFECT
+
+AFFECT [[1224665461898798997]]
+    TRAVERSE ?#[[233745975898428]]
+        LOCATE AFTER [[14914402724175945141]]
+        INSERT {
+            onXochitlTranslateSelectTextRequested: {
+                var status = "select-tool:";
+                try {
+                    sceneView.xochitlTranslateDefaultBackend = documentViewTools.xochitlTranslateBackend || "ai";
+                    status += " backend=" + sceneView.xochitlTranslateDefaultBackend;
+                } catch (eBackend) {
+                    status += " no-backend(" + eBackend + ")";
+                }
+                try {
+                    Experimental.glyphSelection.enabled = true;
+                    status += " glyphSelection";
+                } catch (e0) {
+                    status += " no-glyphSelection(" + e0 + ")";
+                }
+                try {
+                    documentViewTools.selectionPen.tool = Line.SelectionTool;
+                    status += " selectionPen";
+                } catch (e1) {
+                    status += " no-selectionPen(" + e1 + ")";
+                }
+                try {
+                    documentViewTools.activeTool = "selection";
+                    status += " activeTool";
+                } catch (e2) {
+                    status += " no-activeTool(" + e2 + ")";
+                }
+                try {
+                    sceneView.endItemSelection();
+                    status += " endItemSelection";
+                } catch (e3) {
+                    status += " no-endItemSelection(" + e3 + ")";
+                }
+                try {
+                    sceneView.endGlyphSelection();
+                    status += " endGlyphSelection";
+                } catch (e4) {
+                    status += " no-endGlyphSelection(" + e4 + ")";
+                }
+	            try {
+	                sceneView.forceActiveFocus();
+	                status += " forceActiveFocus";
+	            } catch (e5) {
+	                status += " no-forceActiveFocus(" + e5 + ")";
+		            }
+		            try {
+		                status = sceneView.xochitlTranslateEnsureSidecarThenSelect(status);
+		            } catch (e6) {
+		                status += " no-glyphSelectMode(" + e6 + ")";
+		            }
+	            try {
+	                sceneView.xochitlTranslateTraceSelection("select-requested", status);
+	            } catch (e7) {
+	            }
+
+	            var req = new XMLHttpRequest();
+	            req.open("PUT", "file:///tmp/xochitl-translate-debug.txt");
+	            req.send(status);
+	        }
+            onXochitlTranslateSelectTextModeChanged: function(active) {
+                try {
+                    sceneView.xochitlTranslateTraceSelection("mode-changed", "active=" + active);
+                    sceneView.xochitlTranslateGlyphSelectMode = active;
+                    if (!active) {
+                        sceneView.xochitlTranslateResetLastStrokeRect();
+                    }
+                } catch (e8) {
+                }
+            }
+            onXochitlTranslateBackendChanged: {
+                try {
+                    sceneView.xochitlTranslateDefaultBackend = documentViewTools.xochitlTranslateBackend || "ai";
+                } catch (e9) {
+                }
+            }
+        }
+    END TRAVERSE
+END AFFECT
+
+AFFECT [[3197972396468700595]]
+	TRAVERSE ?#[[10742505294233322867]]
+	LOCATE BEFORE [[197082485]]
+	INSERT {
+		signal translateSelection(string backend)
+	}
+	END TRAVERSE
+	TRAVERSE ?#[[214642769434]]
+		LOCATE BEFORE [[425121728314878811.16765000136167945189.7081261925573]]#[[3012293087768835154]]
+		INSERT {
+			~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+				~&5972374&~: translateSelectionTranslate
+				~&481641799955318521&~: ~&5971598&~.~&233696851602406&~
+				~&6504337259&~: ~&214642769434&~.~&6504337259&~
+				~&6504315758&~: "Translate"
+				~&8399601734642709923&~: "qrc:/icons/sparkles.svg"
+				~&254542236275632405&~: ~&10742505294233322867&~.translateSelection("")
+			}
+		}
+	END TRAVERSE
+END AFFECT
+
+AFFECT [[11806562588218124596]]
+	IMPORT net.asivery.CommandExecutor [[180922.180921]]
+	TRAVERSE FocusScope
+	LOCATE AFTER openPage
+		INSERT {
+			property bool xochitlTranslateGlyphSelectMode: false
+			property var xochitlTranslateTextLayerPage: null
+			property string xochitlTranslateTextLayerPageKey: ""
+			property var xochitlTranslateLastStrokeRect: Qt.rect(0, 0, 0, 0)
+			property bool xochitlTranslateLastStrokeRectValid: false
+			property string xochitlTranslateLastStrokeDocumentId: ""
+			property int xochitlTranslateLastStrokePage: -1
+				property string xochitlTranslateBergamotBin: "/home/root/xovi/bergamot/bergamot"
+				property string xochitlTranslateBergamotConfig: "/home/root/xovi/bergamot/enzh/config.yml"
+				property string xochitlTranslateSidecarBin: "/home/root/rmkit-cn/bin/text-layer-sidecar"
+				property string xochitlTranslateTextLayerEnabledFile: "file:///home/root/rmkit-cn/text-layer-sidecar.enabled"
+				property string xochitlTranslateCommandStdout: ""
+				property string xochitlTranslateCommandStderr: ""
+				property string xochitlTranslateSidecarStdout: ""
+				property string xochitlTranslateSidecarStderr: ""
+				property bool xochitlTranslateSidecarPendingSelect: false
+				property bool xochitlTranslatePopupVisible: false
+				property bool xochitlTranslateBusy: false
+			property string xochitlTranslateOriginalText: ""
+			property string xochitlTranslateTranslatedText: ""
+			property string xochitlTranslateStatusText: ""
+			property string xochitlTranslateCjkFont: "Noto Sans CJK SC"
+			property string xochitlTranslateDefaultBackend: "ai"
+			property string xochitlTranslateActiveBackend: "ai"
+			property var xochitlTranslateAiXhr: null
+			property string xochitlTranslateSelectionTraceText: ""
+			property int xochitlTranslateSelectionTraceSeq: 0
+			property string xochitlTranslateFollowupText: ""
+			property bool xochitlTranslateShowOriginalText: true
+
+			AsyncCommandExecutor {
+				id: xochitlTranslateBergamotExecutor
+			onStdOutAvailable: function(output) {
+				root.xochitlTranslateCommandStdout += output + "\n";
+			}
+			onStdErrAvailable: function(errors) {
+				root.xochitlTranslateCommandStderr += errors + "\n";
+			}
+			onRunningChanged: {
+				if (!running && root.xochitlTranslateBusy && root.xochitlTranslateActiveBackend === "local") {
+					root.xochitlTranslateCommandFinished(exitCode);
+				}
+				}
+			}
+
+			AsyncCommandExecutor {
+				id: xochitlTranslateSidecarExecutor
+				onStdOutAvailable: function(output) {
+					root.xochitlTranslateSidecarStdout += output + "\n";
+				}
+				onStdErrAvailable: function(errors) {
+					root.xochitlTranslateSidecarStderr += errors + "\n";
+				}
+				onRunningChanged: {
+					if (!running) {
+						root.xochitlTranslateSidecarFinished(exitCode);
+					}
+				}
+			}
+
+			Timer {
+				id: xochitlTranslateSelectionFailTimer
+				interval: 250
+				repeat: false
+				onTriggered: root.xochitlTranslateExitFailedSelection("timer")
+			}
+
+			function xochitlTranslateDebug(path, message) {
+				try {
+					var req = new XMLHttpRequest();
+					req.open("PUT", path);
+					req.send(message);
+				} catch (e) {
+				}
+			}
+
+			function xochitlTranslateStartSelectionFailTimer(reason) {
+				xochitlTranslateTraceSelection("selection-invalid-wait", "reason=" + reason);
+				xochitlTranslateSelectionFailTimer.restart();
+			}
+
+			function xochitlTranslateCancelSelectionFailTimer(reason) {
+				if (xochitlTranslateSelectionFailTimer.running) {
+					xochitlTranslateTraceSelection("selection-invalid-cancel", "reason=" + reason);
+				}
+				xochitlTranslateSelectionFailTimer.stop();
+			}
+
+			function xochitlTranslateExitFailedSelection(reason) {
+				if (!xochitlTranslateGlyphSelectMode || !xochitlTranslateHasCurrentStrokeRect()) {
+					return;
+				}
+				xochitlTranslateTraceSelection("selection-failed-exit", "reason=" + reason);
+				xochitlTranslateGlyphSelectMode = false;
+				xochitlTranslateResetLastStrokeRect();
+				try {
+					endItemSelection();
+				} catch (e1) {
+				}
+				try {
+					endGlyphSelection();
+				} catch (e2) {
+				}
+				try {
+					strokeHandler.setSelectionActive(false);
+				} catch (e3) {
+				}
+				try {
+					inputSurface.clearFramebuffer();
+				} catch (e4) {
+				}
+				try {
+					viewport.requestRepaintDirty();
+				} catch (e5) {
+				}
+				xochitlTranslateSetPopup("", "", "No text selected.", false, false);
+			}
+
+		function xochitlTranslateTraceSelection(event, detail) {
+			var documentId = "no-doc";
+			var pageIndex = -1;
+			try {
+				if (root.document && root.document.id) documentId = root.document.id;
+				pageIndex = root.page;
+			} catch (e0) {
+			}
+			++xochitlTranslateSelectionTraceSeq;
+			var line = xochitlTranslateSelectionTraceSeq + " " + Date.now()
+				+ " " + event
+				+ " doc=" + documentId
+				+ " page=" + pageIndex
+				+ " mode=" + xochitlTranslateGlyphSelectMode
+				+ " lastValid=" + xochitlTranslateLastStrokeRectValid
+				+ " lastRect=" + xochitlTranslateLastStrokeRect
+				+ " busy=" + xochitlTranslateBusy
+				+ " detail=" + (detail || "");
+			xochitlTranslateSelectionTraceText += line + "\n";
+			if (xochitlTranslateSelectionTraceText.length > 24000) {
+				xochitlTranslateSelectionTraceText = xochitlTranslateSelectionTraceText.slice(xochitlTranslateSelectionTraceText.length - 24000);
+			}
+			xochitlTranslateDebug("file:///tmp/xochitl-translate-selection-trace.txt", xochitlTranslateSelectionTraceText);
+		}
+
+			function xochitlTranslateClosePopup() {
+				try {
+					if (xochitlTranslateAiXhr) {
+						xochitlTranslateAiXhr.abort();
+					}
+				} catch (e0) {
+				}
+				xochitlTranslateAiXhr = null;
+				xochitlTranslatePopupVisible = false;
+				xochitlTranslateBusy = false;
+			}
+
+			function xochitlTranslateSetPopup(original, translated, statusText, busy, showOriginal) {
+				xochitlTranslateOriginalText = original || "";
+				xochitlTranslateTranslatedText = translated || "";
+				xochitlTranslateStatusText = statusText || "";
+				xochitlTranslateBusy = busy;
+				xochitlTranslateFollowupText = "";
+				xochitlTranslateShowOriginalText = showOriginal === false ? false : xochitlTranslateOriginalText.length > 0;
+				xochitlTranslatePopupVisible = true;
+			}
+
+		function xochitlTranslateShellQuote(value) {
+			return "'" + String(value).replace(/'/g, "'\"'\"'") + "'";
+		}
+
+		function xochitlTranslateBergamotCommand() {
+			return "printf '%s\\n' \"$XOCHITL_TRANSLATE_TEXT\" | "
+				+ xochitlTranslateShellQuote(xochitlTranslateBergamotBin)
+				+ " --model-config-paths "
+				+ xochitlTranslateShellQuote(xochitlTranslateBergamotConfig)
+				+ " --log-level off";
+		}
+
+		function xochitlTranslateCurrentDocumentId() {
+			if (root.document && root.document.id) {
+				return root.document.id;
+			}
+			return "unknown-document";
+		}
+
+		function xochitlTranslateDocumentBasePath() {
+			return "/home/root/.local/share/remarkable/xochitl/" + xochitlTranslateCurrentDocumentId();
+		}
+
+		function xochitlTranslateDocumentFileType() {
+			try {
+				var req = new XMLHttpRequest();
+				req.open("GET", "file://" + xochitlTranslateDocumentBasePath() + ".content", false);
+				req.send();
+				if (req.status === 0 || req.status === 200) {
+					var content = JSON.parse(req.responseText || "{}");
+					return String(content.fileType || "").toLowerCase();
+				}
+			} catch (e) {
+				xochitlTranslateTraceSelection("document-type-error", "error=" + e);
+			}
+			return "";
+		}
+
+			function xochitlTranslateTextLayerPageFile() {
+				return "file:///home/root/xovi/translate-text-layer/"
+					+ xochitlTranslateCurrentDocumentId() + "/" + root.page + ".json";
+			}
+
+			function xochitlTranslateHasTextLayerSidecar() {
+				if (!root.document || !root.document.id || root.page < 0) {
+					return false;
+				}
+				try {
+					var req = new XMLHttpRequest();
+					req.open("GET", xochitlTranslateTextLayerPageFile(), false);
+					req.send();
+					return (req.status === 0 || req.status === 200)
+						&& (req.responseText || "").length > 0;
+				} catch (e) {
+					xochitlTranslateTraceSelection("sidecar-check-error", "error=" + e);
+					return false;
+				}
+			}
+
+			function xochitlTranslateShouldBuildTextLayerSidecar() {
+				if (xochitlTranslateDocumentFileType() !== "pdf") {
+					return false;
+				}
+				try {
+					var req = new XMLHttpRequest();
+					req.open("GET", xochitlTranslateTextLayerEnabledFile, false);
+					req.send();
+					if (req.status !== 0 && req.status !== 200) {
+						return false;
+					}
+				} catch (e) {
+					xochitlTranslateTraceSelection("sidecar-disabled", "error=" + e);
+					return false;
+				}
+				return !xochitlTranslateHasTextLayerSidecar();
+			}
+
+			function xochitlTranslateEnsureSidecarThenSelect(status) {
+				if (!xochitlTranslateShouldBuildTextLayerSidecar()) {
+					xochitlTranslateTraceSelection("sidecar-ready", "status=" + status);
+					xochitlTranslateSelectText();
+					return status + " glyphSelectMode";
+				}
+				xochitlTranslateSidecarPendingSelect = true;
+				xochitlTranslateSetPopup("", "", "Preparing PDF text layer...", true, false);
+				if (xochitlTranslateSidecarExecutor.running) {
+					xochitlTranslateTraceSelection("sidecar-already-running", "status=" + status);
+					return status + " sidecarAlreadyRunning";
+				}
+				xochitlTranslateSidecarStdout = "";
+				xochitlTranslateSidecarStderr = "";
+				try {
+					xochitlTranslateSidecarExecutor.command = xochitlTranslateSidecarBin;
+					xochitlTranslateSidecarExecutor.arguments = [
+						"-doc-id", xochitlTranslateCurrentDocumentId(),
+						"-pdftotext", "/home/root/rmkit-cn/bin/pdftotext"
+					];
+					xochitlTranslateTraceSelection("sidecar-start",
+						"command=" + xochitlTranslateSidecarBin + " doc=" + xochitlTranslateCurrentDocumentId());
+					if (!xochitlTranslateSidecarExecutor.startCommand(3000)) {
+						xochitlTranslateTraceSelection("sidecar-start-failed", "");
+						xochitlTranslateSidecarPendingSelect = false;
+						xochitlTranslatePopupVisible = false;
+						xochitlTranslateBusy = false;
+						xochitlTranslateSelectText();
+						return status + " sidecarStartFailed glyphSelectMode";
+					}
+					return status + " sidecarStarted";
+				} catch (e) {
+					xochitlTranslateTraceSelection("sidecar-start-error", "error=" + e);
+					xochitlTranslateSidecarPendingSelect = false;
+					xochitlTranslatePopupVisible = false;
+					xochitlTranslateBusy = false;
+					xochitlTranslateSelectText();
+					return status + " sidecarStartError(" + e + ") glyphSelectMode";
+				}
+			}
+
+			function xochitlTranslateSidecarFinished(exitCode) {
+				xochitlTranslateTraceSelection("sidecar-finished",
+					"exit=" + exitCode
+					+ " ready=" + xochitlTranslateHasTextLayerSidecar()
+					+ " stdout=" + xochitlTranslateSidecarStdout.slice(0, 160)
+					+ " stderr=" + xochitlTranslateSidecarStderr.slice(0, 240));
+				xochitlTranslateDebug("file:///tmp/xochitl-translate-sidecar-debug.txt",
+					"exit=" + exitCode
+					+ "\nstdout=" + xochitlTranslateSidecarStdout
+					+ "\nstderr=" + xochitlTranslateSidecarStderr);
+				if (!xochitlTranslateSidecarPendingSelect) {
+					return;
+				}
+				xochitlTranslateSidecarPendingSelect = false;
+				xochitlTranslatePopupVisible = false;
+				xochitlTranslateBusy = false;
+				xochitlTranslateSelectText();
+			}
+
+		function xochitlTranslateBuildTranslatePrompt(sentence) {
+			var prompt = "请帮我翻译这句话为中文:" + sentence
+				+ ", 以及分解句子结构,以及显示英语非常用单词(不属于8000常用词)意思,用词根记忆法帮我记忆."
+				+ "不要使用Markdown,只输出简化纯文本,严格使用这个格式:"
+				+ "\n译文:..."
+				+ "\n句子结构:..."
+					+ "\n不常用单词:\n1.xxx"
+				+ "\n2.yyy";
+			return prompt;
+		}
+
+		function xochitlTranslateBuildFollowupPrompt(question) {
+			var prompt = "请基于以下原文和上一轮回答，回答追问。不要使用Markdown，只输出简化纯文本。";
+			if (xochitlTranslateOriginalText.length > 0) {
+				prompt += "\n\n原文:\n" + xochitlTranslateOriginalText;
+			}
+			if (xochitlTranslateTranslatedText.length > 0) {
+				prompt += "\n\n上一轮回答:\n" + xochitlTranslateTranslatedText;
+			}
+			prompt += "\n\n追问:\n" + question;
+			return prompt;
+		}
+
+		function xochitlTranslateStartLocal(cleanText) {
+			xochitlTranslateActiveBackend = "local";
+			xochitlTranslateSetPopup(cleanText, "", "Translating...", true);
+			xochitlTranslateCommandStdout = "";
+			xochitlTranslateCommandStderr = "";
+			try {
+				xochitlTranslateBergamotExecutor.command = "/bin/sh";
+				xochitlTranslateBergamotExecutor.arguments = ["-c", xochitlTranslateBergamotCommand()];
+				xochitlTranslateBergamotExecutor.environment = {
+					"XOCHITL_TRANSLATE_TEXT": cleanText
+				};
+				if (!xochitlTranslateBergamotExecutor.startCommand(3000)) {
+					xochitlTranslateBusy = false;
+					xochitlTranslateStatusText = "Translate failed: bergamot did not start.";
+				}
+			} catch (e) {
+				xochitlTranslateBusy = false;
+				xochitlTranslateStatusText = "Translate failed: " + e;
+				xochitlTranslateDebug("file:///tmp/xochitl-translate-command-debug.txt",
+					"start error=" + e);
+			}
+		}
+
+		function xochitlTranslateStartAI(prompt, originalText, statusText, showOriginal) {
+			xochitlTranslateActiveBackend = "ai";
+			xochitlTranslateSetPopup(originalText || "", "", statusText || "AI...", true, showOriginal);
+			xochitlTranslateTranslatedText = "";
+			xochitlTranslateCommandStdout = "";
+			xochitlTranslateCommandStderr = "";
+			try {
+				if (xochitlTranslateAiXhr) {
+					xochitlTranslateAiXhr.abort();
+				}
+			} catch (e0) {
+			}
+			var xhr = new XMLHttpRequest();
+			xochitlTranslateAiXhr = xhr;
+			var lastLen = 0;
+			var tail = "";
+			xhr.open("POST", "http://127.0.0.1:8080/ai-page-chat");
+			xhr.setRequestHeader("Content-Type", "application/json");
+			xhr.onreadystatechange = function() {
+				var rs = xhr.readyState;
+				if (rs !== XMLHttpRequest.LOADING && rs !== XMLHttpRequest.DONE) {
+					return;
+				}
+				var chunk = xhr.responseText.substring(lastLen);
+				lastLen = xhr.responseText.length;
+				var lines = (tail + chunk).split("\n");
+				if (rs === XMLHttpRequest.DONE) {
+					tail = "";
+				} else {
+					tail = lines.pop();
+				}
+				for (var i = 0; i < lines.length; i++) {
+					var line = lines[i].replace(/\r$/, "");
+					if (line.length === 0) {
+						continue;
+					}
+					var d;
+					try {
+						d = JSON.parse(line);
+					} catch (e1) {
+						continue;
+					}
+					if (typeof d.text === "string" && d.text.length > 0) {
+						xochitlTranslateTranslatedText += d.text;
+						xochitlTranslateStatusText = "";
+					} else if (d.error) {
+						xochitlTranslateStatusText = "AI failed: " + d.error;
+					}
+				}
+				if (rs === XMLHttpRequest.DONE) {
+					xochitlTranslateBusy = false;
+					xochitlTranslateAiXhr = null;
+					if (xhr.status !== 200 && xochitlTranslateTranslatedText.length === 0) {
+						xochitlTranslateStatusText = "AI failed: HTTP " + xhr.status;
+					} else if (xochitlTranslateTranslatedText.length === 0 && xochitlTranslateStatusText.length === 0) {
+						xochitlTranslateStatusText = "AI failed: empty output.";
+					}
+				}
+			}
+			xhr.onerror = function() {
+				xochitlTranslateBusy = false;
+				xochitlTranslateAiXhr = null;
+				xochitlTranslateStatusText = "AI failed: network error.";
+			}
+			xhr.send(JSON.stringify({ prompt: prompt }));
+		}
+
+		function xochitlTranslateSubmitFollowup() {
+			var question = (xochitlTranslateFollowupText || "").replace(/^\s+|\s+$/g, "");
+			if (question.length === 0) {
+				xochitlTranslateStatusText = "Enter a question.";
+				return;
+			}
+			if (xochitlTranslateActiveBackend !== "ai") {
+				xochitlTranslateStatusText = "Ask is only available for AI.";
+				return;
+			}
+			var prompt = xochitlTranslateBuildFollowupPrompt(question);
+			xochitlTranslateFollowupText = "";
+			xochitlTranslateShowOriginalText = false;
+			xochitlTranslateDebug("file:///tmp/xochitl-translate-command-debug.txt",
+				"ai ask question=" + question.slice(0, 240));
+			xochitlTranslateStartAI(prompt, xochitlTranslateOriginalText, "AI...", false);
+		}
+
+		function xochitlTranslateCommandFinished(exitCode) {
+			xochitlTranslateBusy = false;
+			var translated = xochitlTranslateCommandStdout.replace(/^\s+|\s+$/g, "");
+			var errors = xochitlTranslateCommandStderr.replace(/^\s+|\s+$/g, "");
+			if (exitCode === 0 && translated.length > 0) {
+				xochitlTranslateTranslatedText = translated;
+				xochitlTranslateStatusText = "";
+				return;
+			}
+			if (exitCode === 0) {
+				xochitlTranslateStatusText = "Translate failed: empty output.";
+			} else {
+				xochitlTranslateStatusText = "Translate failed: exit " + exitCode;
+			}
+			xochitlTranslateDebug("file:///tmp/xochitl-translate-command-debug.txt",
+				"exit=" + exitCode
+				+ " stdout=" + translated.slice(0, 240)
+				+ " stderr=" + errors.slice(0, 240));
+		}
+
+		function xochitlTranslateText(text, backend) {
+			var cleanText = (text || "").replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+			if (cleanText.length === 0) {
+				xochitlTranslateSetPopup("", "", "No text selected.", false);
+				return;
+			}
+			if (xochitlTranslateBergamotExecutor.running) {
+				if (xochitlTranslatePopupVisible) {
+					xochitlTranslateStatusText = "Translate is already running.";
+				} else {
+					xochitlTranslateSetPopup(cleanText, "", "Translate is already running.", false);
+				}
+				return;
+			}
+			var selectedBackend = backend || xochitlTranslateDefaultBackend;
+			if (selectedBackend === "local") {
+				xochitlTranslateStartLocal(cleanText);
+				return;
+			}
+			var freshThreadPrompt = xochitlTranslateBuildTranslatePrompt(cleanText);
+			xochitlTranslateStartAI(freshThreadPrompt, cleanText, "AI...", true);
+		}
+
+				function xochitlTranslateResetLastStrokeRect() {
+					xochitlTranslateCancelSelectionFailTimer("reset");
+					if (xochitlTranslateLastStrokeRectValid || xochitlTranslateGlyphSelectMode) {
+						xochitlTranslateTraceSelection("reset-last-stroke", "");
+					}
+				xochitlTranslateLastStrokeRectValid = false;
+				xochitlTranslateLastStrokeDocumentId = "";
+				xochitlTranslateLastStrokePage = -1;
+			}
+
+			function xochitlTranslateHasCurrentStrokeRect() {
+				return xochitlTranslateLastStrokeRectValid
+					&& root.document
+					&& xochitlTranslateLastStrokeDocumentId === root.document.id
+					&& xochitlTranslateLastStrokePage === root.page;
+			}
+
+			function xochitlTranslateLoadTextLayerPage() {
+				if (!root.document || !root.document.id || root.page < 0) {
+					return null;
+				}
+				var pageKey = root.document.id + ":" + root.page;
+				if (xochitlTranslateTextLayerPage && xochitlTranslateTextLayerPageKey === pageKey) {
+					return xochitlTranslateTextLayerPage;
+				}
+				xochitlTranslateTextLayerPage = null;
+				xochitlTranslateTextLayerPageKey = pageKey;
+				try {
+					var req = new XMLHttpRequest();
+					req.open("GET", "file:///home/root/xovi/translate-text-layer/" + root.document.id + "/" + root.page + ".json", false);
+					req.send();
+					if (req.status !== 0 && req.status !== 200) {
+						xochitlTranslateTraceSelection("text-layer-missing",
+							"status=" + req.status + " urlDoc=" + root.document.id + " bytes=" + req.responseText.length);
+						xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+							"textLayer missing doc=" + root.document.id + " page=" + root.page + " status=" + req.status);
+						return null;
+					}
+					if (req.responseText.length === 0) {
+						xochitlTranslateTraceSelection("text-layer-empty",
+							"status=" + req.status + " urlDoc=" + root.document.id);
+						xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+							"textLayer empty doc=" + root.document.id + " page=" + root.page + " status=" + req.status);
+						return null;
+					}
+					xochitlTranslateTraceSelection("text-layer-loaded",
+						"status=" + req.status + " bytes=" + req.responseText.length
+						+ " head=" + req.responseText.slice(0, 80).replace(/\n/g, " "));
+					xochitlTranslateTextLayerPage = JSON.parse(req.responseText);
+					if (xochitlTranslateTextLayerPage && xochitlTranslateTextLayerPage.page) {
+						xochitlTranslateTextLayerPage = xochitlTranslateTextLayerPage.page;
+					}
+					xochitlTranslateTraceSelection("text-layer-parsed",
+						"sentences=" + (xochitlTranslateTextLayerPage.sentences ? xochitlTranslateTextLayerPage.sentences.length : 0)
+						+ " width=" + xochitlTranslateTextLayerPage.width
+						+ " height=" + xochitlTranslateTextLayerPage.height);
+					return xochitlTranslateTextLayerPage;
+				} catch (e) {
+					xochitlTranslateTraceSelection("text-layer-error",
+						"error=" + e + " bytes=" + (req && req.responseText ? req.responseText.length : 0)
+						+ " head=" + (req && req.responseText ? req.responseText.slice(0, 80).replace(/\n/g, " ") : ""));
+					xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+						"textLayer error doc=" + root.document.id + " page=" + root.page + " error=" + e);
+					xochitlTranslateTextLayerPage = null;
+					return null;
+				}
+			}
+
+		function xochitlTranslateRectWidth(rect) {
+			return rect.w !== undefined ? rect.w : rect.width;
+		}
+
+		function xochitlTranslateRectHeight(rect) {
+			return rect.h !== undefined ? rect.h : rect.height;
+		}
+
+		function xochitlTranslatePaddedRect(rect, source) {
+			var strokeSource = source === "fallback-rect" || source === "stroke-rect";
+			var xPad = strokeSource ? 3 : 1.5;
+			var yPad = strokeSource ? 8 : 3;
+			return Qt.rect(rect.x - xPad, rect.y - yPad,
+				xochitlTranslateRectWidth(rect) + xPad * 2,
+				xochitlTranslateRectHeight(rect) + yPad * 2);
+		}
+
+		function xochitlTranslateIntersectionArea(a, b) {
+			var left = Math.max(a.x, b.x);
+			var top = Math.max(a.y, b.y);
+			var right = Math.min(a.x + xochitlTranslateRectWidth(a), b.x + xochitlTranslateRectWidth(b));
+			var bottom = Math.min(a.y + xochitlTranslateRectHeight(a), b.y + xochitlTranslateRectHeight(b));
+			if (right <= left || bottom <= top) {
+				return 0;
+			}
+			return (right - left) * (bottom - top);
+		}
+
+		function xochitlTranslateContentRect(pageData) {
+			try {
+				if (root.controller && root.controller.primaryContentRect
+						&& root.controller.primaryContentRect.width > 0
+						&& root.controller.primaryContentRect.height > 0) {
+					return root.controller.primaryContentRect;
+				}
+			} catch (e) {
+			}
+			return Qt.rect(0, 0, pageData.width, pageData.height);
+		}
+
+		function xochitlTranslateToSceneArea(area, pageData, contentRect) {
+			var sx = contentRect.width / pageData.width;
+			var sy = contentRect.height / pageData.height;
+			return Qt.rect(contentRect.x + area.x * sx,
+				contentRect.y + area.y * sy,
+				xochitlTranslateRectWidth(area) * sx,
+				xochitlTranslateRectHeight(area) * sy);
+		}
+
+		function xochitlTranslateDescribeRects(rects, limit) {
+			var text = "";
+			if (!rects) {
+				return "none";
+			}
+			var count = Math.min(rects.length || 0, limit);
+			for (var i = 0; i < count; ++i) {
+				if (i > 0) {
+					text += ";";
+				}
+				text += rects[i];
+			}
+			return "count=" + (rects.length || 0) + " first=" + text;
+		}
+
+			function xochitlTranslateSelectSentenceFromRects(hitAreas, source) {
+				xochitlTranslateTraceSelection("sentence-try",
+					"source=" + source + " hitAreas=" + xochitlTranslateDescribeRects(hitAreas, 4));
+				var pageData = xochitlTranslateLoadTextLayerPage();
+				if (!pageData || !pageData.sentences) {
+					xochitlTranslateTraceSelection("sentence-no-layer",
+						"source=" + source + " pageData=" + pageData);
+					return false;
+				}
+				if (!hitAreas || hitAreas.length === 0) {
+					xochitlTranslateTraceSelection("sentence-no-hitareas", "source=" + source);
+					return false;
+				}
+
+			var contentRect = xochitlTranslateContentRect(pageData);
+			var paddedHitAreas = [];
+			for (var h = 0; h < hitAreas.length; ++h) {
+				paddedHitAreas.push(xochitlTranslatePaddedRect(hitAreas[h], source));
+			}
+			var strokeSource = source === "fallback-rect" || source === "stroke-rect";
+			var candidates = [];
+			var directCandidates = [];
+			var maxScore = 0;
+			var maxDirectScore = 0;
+
+			for (var i = 0; i < pageData.sentences.length; ++i) {
+				var sentence = pageData.sentences[i];
+				if (sentence.bbox) {
+					var sentenceBounds = xochitlTranslateToSceneArea(sentence.bbox, pageData, contentRect);
+					var boundsHit = false;
+					for (var boundsIndex = 0; boundsIndex < paddedHitAreas.length; ++boundsIndex) {
+						if (xochitlTranslateIntersectionArea(sentenceBounds, paddedHitAreas[boundsIndex]) > 0) {
+							boundsHit = true;
+							break;
+						}
+					}
+					if (!boundsHit) {
+						continue;
+					}
+				}
+				var score = 0;
+				var directScore = 0;
+				for (var j = 0; sentence.areas && j < sentence.areas.length; ++j) {
+					var sentenceArea = xochitlTranslateToSceneArea(sentence.areas[j], pageData, contentRect);
+					for (var directIndex = 0; directIndex < hitAreas.length; ++directIndex) {
+						directScore += xochitlTranslateIntersectionArea(sentenceArea, hitAreas[directIndex]);
+					}
+					for (var paddedIndex = 0; paddedIndex < paddedHitAreas.length; ++paddedIndex) {
+						score += xochitlTranslateIntersectionArea(sentenceArea, paddedHitAreas[paddedIndex]);
+					}
+				}
+				if (score > 0 || directScore > 0) {
+					var candidate = { sentence: sentence, score: score, directScore: directScore };
+					if (score > 0) {
+						candidates.push(candidate);
+					}
+					if (directScore > 0) {
+						directCandidates.push(candidate);
+						maxDirectScore = Math.max(maxDirectScore, directScore);
+					}
+					maxScore = Math.max(maxScore, score);
+				}
+			}
+
+			var selectedAreas = [];
+			var selectedText = [];
+			var hitSentences = 0;
+			var minScore = maxScore * 0.45;
+			var selectedCandidates = [];
+			var selectionMode = "multi";
+			if (strokeSource) {
+				var sourceCandidates = directCandidates.length > 0 ? directCandidates : candidates;
+				var bestCandidate = null;
+				var bestScore = -1;
+				selectionMode = directCandidates.length > 0 ? "direct-single" : "padded-single";
+				minScore = directCandidates.length > 0 ? maxDirectScore : maxScore;
+				for (var bestIndex = 0; bestIndex < sourceCandidates.length; ++bestIndex) {
+					var candidateScore = directCandidates.length > 0
+						? sourceCandidates[bestIndex].directScore
+						: sourceCandidates[bestIndex].score;
+					if (candidateScore > bestScore) {
+						bestScore = candidateScore;
+						bestCandidate = sourceCandidates[bestIndex];
+					}
+				}
+				if (bestCandidate) {
+					selectedCandidates.push(bestCandidate);
+				}
+			} else {
+				for (var c = 0; c < candidates.length; ++c) {
+					if (candidates[c].score < minScore) {
+						continue;
+					}
+					selectedCandidates.push(candidates[c]);
+				}
+			}
+			for (var selectedIndex = 0; selectedIndex < selectedCandidates.length; ++selectedIndex) {
+				++hitSentences;
+				var selectedSentence = selectedCandidates[selectedIndex].sentence;
+				if (selectedSentence.text) {
+					selectedText.push(selectedSentence.text);
+				}
+				for (var k = 0; selectedSentence.areas && k < selectedSentence.areas.length; ++k) {
+					selectedAreas.push(xochitlTranslateToSceneArea(selectedSentence.areas[k], pageData, contentRect));
+				}
+			}
+
+				if (!hitSentences || selectedAreas.length === 0) {
+					xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+						"sentence miss doc=" + root.document.id + " page=" + root.page
+						+ " source=" + source + " hitAreas=" + xochitlTranslateDescribeRects(hitAreas, 4)
+						+ " contentRect=" + contentRect
+						+ " mode=" + selectionMode
+						+ " maxScore=" + maxScore + " maxDirectScore=" + maxDirectScore);
+					xochitlTranslateTraceSelection("sentence-miss",
+						"source=" + source
+						+ " mode=" + selectionMode
+						+ " hitAreas=" + xochitlTranslateDescribeRects(hitAreas, 4)
+						+ " contentRect=" + contentRect
+						+ " maxScore=" + maxScore
+						+ " maxDirectScore=" + maxDirectScore);
+					return false;
+				}
+
+			var text = selectedText.join(" ").replace(/\s+/g, " ").trim();
+			try {
+				glyphSelectionRoot.active = true;
+				root.glyphSelection.setSelection(selectedAreas, text);
+				strokeHandler.setSelectionActive(true);
+				root.glyphSelection.open();
+				xochitlTranslateResetLastStrokeRect();
+					xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+						"sentence hit doc=" + root.document.id + " page=" + root.page
+						+ " source=" + source
+					+ " hits=" + hitSentences + " areas=" + selectedAreas.length
+					+ " mode=" + selectionMode
+					+ " maxScore=" + maxScore + " minScore=" + minScore
+					+ " maxDirectScore=" + maxDirectScore
+						+ " contentRect=" + contentRect
+						+ " hitAreas=" + xochitlTranslateDescribeRects(hitAreas, 4)
+						+ " text=" + text.slice(0, 220));
+					xochitlTranslateTraceSelection("sentence-hit",
+						"source=" + source
+						+ " hits=" + hitSentences
+						+ " areas=" + selectedAreas.length
+						+ " mode=" + selectionMode
+						+ " textLen=" + text.length
+						+ " text=" + text.slice(0, 120));
+					return true;
+				} catch (e) {
+					xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+						"sentence select error=" + e + " areas=" + selectedAreas.length);
+					xochitlTranslateTraceSelection("sentence-select-error",
+						"source=" + source + " error=" + e + " areas=" + selectedAreas.length);
+					return false;
+				}
+			}
+
+			function xochitlTranslateSelectText() {
+				var status = "text-select:";
+				xochitlTranslateTraceSelection("select-text-start", "");
+				try {
+					endItemSelection();
+				status += " endItemSelection";
+			} catch (e1) {
+				status += " no-endItemSelection(" + e1 + ")";
+			}
+			try {
+				endGlyphSelection();
+				status += " endGlyphSelection";
+			} catch (e2) {
+				status += " no-endGlyphSelection(" + e2 + ")";
+			}
+			try {
+				textSelectionMenu.close();
+				status += " closeTextSelectionMenu";
+			} catch (e3) {
+				status += " no-closeTextSelectionMenu(" + e3 + ")";
+			}
+			try {
+				xochitlTranslateResetLastStrokeRect();
+				xochitlTranslateGlyphSelectMode = true;
+				status += " glyphSelectMode";
+			} catch (e4) {
+				status += " no-glyphSelectMode(" + e4 + ")";
+			}
+			try {
+				forceActiveFocus();
+				status += " forceActiveFocus";
+			} catch (e5) {
+				status += " no-forceActiveFocus(" + e5 + ")";
+			}
+
+				var req = new XMLHttpRequest();
+				req.open("PUT", "file:///tmp/xochitl-translate-debug.txt");
+				req.send(status);
+				xochitlTranslateTraceSelection("select-text-done", status);
+			}
+
+		Rectangle {
+			id: xochitlTranslatePopupDismissLayer
+			visible: root.xochitlTranslatePopupVisible
+			z: 9999
+			anchors.fill: parent
+			color: "transparent"
+
+			MouseArea {
+				anchors.fill: parent
+				onClicked: root.xochitlTranslateClosePopup()
+			}
+		}
+
+		Rectangle {
+			id: xochitlTranslatePopup
+			visible: root.xochitlTranslatePopupVisible
+			z: 10000
+			color: "white"
+				border.color: "black"
+				border.width: 2
+				property real xochitlTranslatePopupTop: Math.max(24,
+					(parent.height - Math.min(parent.height - 48, Math.max(560, parent.height * 0.72))) / 2)
+				width: Math.min(parent.width - 24, Math.max(480, parent.width * 0.78))
+				height: Math.min(parent.height - xochitlTranslatePopupTop - 24,
+					Math.max(460, parent.height * 0.52))
+				anchors.horizontalCenter: parent.horizontalCenter
+				y: xochitlTranslatePopupTop
+
+			MouseArea {
+				anchors.fill: parent
+			}
+
+			Text {
+				id: xochitlTranslatePopupTitle
+				text: root.xochitlTranslateActiveBackend === "local" ? "Translate - Local" : "Translate - AI"
+				font.pointSize: 24
+				font.bold: true
+				color: "black"
+				anchors.left: parent.left
+				anchors.leftMargin: 24
+				anchors.top: parent.top
+				anchors.topMargin: 20
+			}
+
+			Rectangle {
+				id: xochitlTranslatePopupClose
+				width: 58
+				height: 46
+				anchors.right: parent.right
+				anchors.rightMargin: 18
+				anchors.top: parent.top
+				anchors.topMargin: 14
+				color: "white"
+				border.color: "black"
+				border.width: 1
+
+				Text {
+					anchors.centerIn: parent
+					text: "X"
+					font.pointSize: 20
+					font.bold: true
+					color: "black"
+				}
+
+				MouseArea {
+					anchors.fill: parent
+					onClicked: root.xochitlTranslateClosePopup()
+				}
+			}
+
+			Text {
+				id: xochitlTranslatePopupStatus
+				text: root.xochitlTranslateStatusText
+				visible: text.length > 0
+				color: "black"
+				font.pointSize: 17
+				wrapMode: Text.WordWrap
+				anchors.left: parent.left
+				anchors.right: xochitlTranslatePopupClose.left
+				anchors.leftMargin: 24
+				anchors.rightMargin: 14
+				anchors.top: xochitlTranslatePopupTitle.bottom
+				anchors.topMargin: 8
+			}
+
+			Flickable {
+				id: xochitlTranslatePopupFlick
+				clip: true
+				anchors.left: parent.left
+				anchors.right: parent.right
+				anchors.top: xochitlTranslatePopupStatus.visible ? xochitlTranslatePopupStatus.bottom : xochitlTranslatePopupTitle.bottom
+				anchors.bottom: xochitlTranslateQuestionPanel.top
+				anchors.leftMargin: 24
+				anchors.rightMargin: 24
+				anchors.topMargin: 18
+				anchors.bottomMargin: 14
+				contentWidth: width
+				contentHeight: xochitlTranslatePopupContent.height
+
+				Column {
+					id: xochitlTranslatePopupContent
+					width: xochitlTranslatePopupFlick.width
+					spacing: 16
+
+						Text {
+							text: "Original"
+							visible: root.xochitlTranslateShowOriginalText
+							width: parent.width
+							font.pointSize: 18
+							font.bold: true
+							color: "black"
+						}
+
+						Text {
+							text: root.xochitlTranslateOriginalText
+							visible: root.xochitlTranslateShowOriginalText
+							width: parent.width
+							font.pointSize: 18
+							color: "black"
+							wrapMode: Text.WordWrap
+						}
+
+					Text {
+						text: "Answer"
+						width: parent.width
+						font.pointSize: 18
+						font.bold: true
+						color: "black"
+					}
+
+					Text {
+							text: root.xochitlTranslateTranslatedText
+							width: parent.width
+							font.family: root.xochitlTranslateCjkFont
+							font.pointSize: 21
+							color: "black"
+							wrapMode: Text.WordWrap
+						}
+				}
+			}
+
+			Rectangle {
+				id: xochitlTranslateQuestionPanel
+				anchors.left: parent.left
+				anchors.right: parent.right
+				anchors.bottom: parent.bottom
+				anchors.leftMargin: 24
+				anchors.rightMargin: 24
+				anchors.bottomMargin: 20
+				height: 82
+				color: "white"
+				border.color: "black"
+				border.width: 1
+				visible: root.xochitlTranslateActiveBackend === "ai"
+
+				TextEdit {
+					id: xochitlTranslateQuestionInput
+					text: root.xochitlTranslateFollowupText
+					anchors.left: parent.left
+					anchors.right: xochitlTranslateQuestionSend.left
+					anchors.top: parent.top
+					anchors.bottom: parent.bottom
+					anchors.leftMargin: 12
+					anchors.rightMargin: 12
+					anchors.topMargin: 8
+					anchors.bottomMargin: 8
+					wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+					font.pointSize: 18
+					color: "black"
+					focus: false
+					inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhMultiLine
+					KeyboardSettings.actionPanelEnabled: true
+					onTextChanged: root.xochitlTranslateFollowupText = text
+					onActiveFocusChanged: {
+						if (activeFocus) {
+							Qt.inputMethod.show();
+						}
+					}
+					cursorDelegate: Rectangle {
+						width: 2
+						height: xochitlTranslateQuestionInput.font.pixelSize
+						color: "black"
+						visible: parent.activeFocus
+					}
+				}
+
+				Rectangle {
+					id: xochitlTranslateQuestionSend
+					width: 96
+					height: parent.height
+					anchors.right: parent.right
+					anchors.top: parent.top
+					color: (root.xochitlTranslateBusy && root.xochitlTranslateActiveBackend !== "ai") ? "#eeeeee" : "white"
+					border.color: "black"
+					border.width: 1
+
+					Text {
+						anchors.centerIn: parent
+						text: "Ask"
+						font.pointSize: 18
+						font.bold: true
+						color: "black"
+					}
+
+					MouseArea {
+						anchors.fill: parent
+						enabled: root.xochitlTranslateActiveBackend === "ai" && !root.xochitlTranslateBusy
+						onClicked: root.xochitlTranslateSubmitFollowup()
+					}
+				}
+
+				MouseArea {
+					anchors.left: parent.left
+					anchors.right: xochitlTranslateQuestionSend.left
+					anchors.top: parent.top
+					anchors.bottom: parent.bottom
+					onClicked: {
+						xochitlTranslateQuestionInput.forceActiveFocus();
+						Qt.inputMethod.show();
+					}
+				}
+			}
+		}
+	}
+	END TRAVERSE
+	TRAVERSE ?#glyphSelection
+		LOCATE AFTER ALL
+		INSERT {
+			xochitlTranslateTextFn: root.xochitlTranslateText
+		}
+	END TRAVERSE
+	TRAVERSE ?#textSelectionMenu
+		LOCATE AFTER ALL
+		INSERT {
+			xochitlTranslateTextFn: root.xochitlTranslateText
+		}
+	END TRAVERSE
+	TRAVERSE ?#hwcSelectionTool
+		LOCATE AFTER ALL
+		INSERT {
+			xochitlTranslateTextFn: root.xochitlTranslateText
+		}
+	END TRAVERSE
+	TRAVERSE FocusScope > [[17327575798530333160]]#[[11510301049521437407]]
+	REBUILD onStrokeCompleted
+		LOCATE AFTER STREAM / completedStroke(); /
+		INSERT {
+				try {
+					var strokeDebugReq = new XMLHttpRequest();
+					var strokeBounds = stroke.boundingRect;
+						strokeDebugReq.open("PUT", "file:///tmp/xochitl-translate-stroke-debug.txt");
+						strokeDebugReq.send("strokeCompleted translateMode=" + root.xochitlTranslateGlyphSelectMode
+					+ " selection=" + stroke.isSelectionTool
+					+ " points=" + stroke.pointCount
+						+ " bounds=" + strokeBounds
+						+ " lineTool=" + strokeHandler.lineTool);
+						root.xochitlTranslateTraceSelection("stroke-completed",
+							"selection=" + stroke.isSelectionTool
+							+ " points=" + stroke.pointCount
+							+ " bounds=" + strokeBounds
+							+ " lineTool=" + strokeHandler.lineTool);
+				} catch (strokeDebugError) {
+				}
+					if (root.xochitlTranslateGlyphSelectMode && stroke.isSelectionTool) {
+						if (stroke.pointCount === 0) {
+							root.xochitlTranslateResetLastStrokeRect();
+							endItemSelection();
+							return;
+						}
+					inputSurface.clearFramebuffer();
+					try {
+						root.xochitlTranslateLastStrokeRect = stroke.boundingRect;
+						root.xochitlTranslateLastStrokeRectValid = true;
+						root.xochitlTranslateLastStrokeDocumentId = root.document ? root.document.id : "";
+						root.xochitlTranslateLastStrokePage = root.page;
+					var convertDebugReq = new XMLHttpRequest();
+						convertDebugReq.open("PUT", "file:///tmp/xochitl-translate-stroke-debug.txt");
+						convertDebugReq.send("strokeCompleted translateMode=" + root.xochitlTranslateGlyphSelectMode
+							+ " selection=" + stroke.isSelectionTool
+							+ " selectSource=selection-stroke"
+						+ " points=" + stroke.pointCount
+						+ " bounds=" + stroke.boundingRect
+						+ " lineTool=" + strokeHandler.lineTool);
+						controller.selectWithLine(stroke, SceneController.IgnoreTapGesture);
+						root.xochitlTranslateTraceSelection("select-with-line-called",
+							"bounds=" + stroke.boundingRect + " points=" + stroke.pointCount);
+					} catch (selectError) {
+						var selectDebugReq = new XMLHttpRequest();
+						selectDebugReq.open("PUT", "file:///tmp/xochitl-translate-stroke-debug.txt");
+						selectDebugReq.send("selectWithLine error=" + selectError);
+						root.xochitlTranslateTraceSelection("select-with-line-error", "error=" + selectError);
+					}
+					Qt.callLater(inputSurface.clearFramebuffer);
+					viewport.requestRepaintDirty();
+					root.xochitlTranslateTraceSelection("stroke-handler-return", "");
+					return;
+				}
+		}
+	END REBUILD
+	END TRAVERSE
+	TRAVERSE ?#[[18399528329672988301]]
+	LOCATE AFTER ALL
+	INSERT {
+		onTranslateSelection: function(backend) {
+			~&6504254477&~.~&7282468819357443632&~(function () {
+				~&11077763042784530127&~.xochitlTranslateFrom(~&8399340108982949229&~.~&5308518110917893541&~(~&8399340108982949229&~.~&15752433948179392809&~, ~&6504254477&~.~&15777890623490054006&~), backend);
+				~&6504254477&~.~&12148339614529610933&~();
+			});
+		}
+	}
+		END TRAVERSE
+		TRAVERSE FocusScope > Connections[.target=root.controller]
+		REBUILD onAreaSelected
+			LOCATE BEFORE { const stillSelecting = strokeHandler.lineTool == Line.SelectionTool; }
+			REPLACE LOCATED WITH {
+				const stillSelecting = strokeHandler.lineTool == Line.SelectionTool || root.xochitlTranslateGlyphSelectMode;
+			}
+			LOCATE AFTER { const stillSelecting = strokeHandler.lineTool == Line.SelectionTool || root.xochitlTranslateGlyphSelectMode; }
+			INSERT {
+					try {
+						var areaDebugReq = new XMLHttpRequest();
+						areaDebugReq.open("PUT", "file:///tmp/xochitl-translate-area-debug.txt");
+						areaDebugReq.send("areaSelected validSelection=" + validSelection
+							+ " validGlyphSelection=" + validGlyphSelection
+							+ " stillSelecting=" + stillSelecting
+							+ " translateMode=" + root.xochitlTranslateGlyphSelectMode
+							+ " sceneRect=" + sceneRect);
+						root.xochitlTranslateTraceSelection("area-selected",
+							"validSelection=" + validSelection
+							+ " validGlyphSelection=" + validGlyphSelection
+							+ " stillSelecting=" + stillSelecting
+							+ " sceneRect=" + sceneRect);
+					} catch (areaDebugError) {
+					}
+			}
+			LOCATE BEFORE STREAM / if ((validSelection || validGlyphSelection) && stillSelecting) { /
+				INSERT {
+					try {
+						if (!(validSelection || validGlyphSelection) && root.xochitlTranslateGlyphSelectMode) {
+							if (root.xochitlTranslateHasCurrentStrokeRect()
+									&& root.xochitlTranslateSelectSentenceFromRects([root.xochitlTranslateLastStrokeRect], "fallback-rect")) {
+								root.xochitlTranslateResetLastStrokeRect();
+								return;
+							}
+							root.xochitlTranslateStartSelectionFailTimer("invalid-area");
+							return;
+						}
+					} catch (sentenceFallbackError) {
+						root.xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+							"sentence fallback error=" + sentenceFallbackError);
+				}
+			}
+		END REBUILD
+		REBUILD onGlyphsSelected
+				LOCATE BEFORE STREAM / glyphSelectionRoot.active = true; /
+					INSERT {
+							try {
+								root.xochitlTranslateCancelSelectionFailTimer("glyphs-selected");
+								root.xochitlTranslateTraceSelection("glyphs-selected-before-open",
+									"lastStroke=" + root.xochitlTranslateLastStrokeRect);
+								if (root.xochitlTranslateGlyphSelectMode
+									&& root.xochitlTranslateHasCurrentStrokeRect()
+									&& root.xochitlTranslateSelectSentenceFromRects([root.xochitlTranslateLastStrokeRect], "stroke-rect")) {
+								return;
+						}
+				} catch (sentenceGlyphError) {
+					root.xochitlTranslateDebug("file:///tmp/xochitl-translate-sentence-debug.txt",
+						"sentence glyph error=" + sentenceGlyphError);
+				}
+			}
+			LOCATE AFTER STREAM / root.glyphSelection.setSelection(areas, text); /
+			INSERT {
+					try {
+						var glyphDebugReq = new XMLHttpRequest();
+						var glyphPreview = (text || "").replace(/\n/g, " ").slice(0, 180);
+						glyphDebugReq.open("PUT", "file:///tmp/xochitl-translate-glyph-debug.txt");
+						var glyphRect = root.glyphSelection.selectionBoundingRect;
+					glyphDebugReq.send("glyphsSelected len=" + (text ? text.length : 0)
+						+ " rect=" + glyphRect
+						+ " stillSelecting=" + (strokeHandler.lineTool == Line.SelectionTool)
+							+ " translateMode=" + root.xochitlTranslateGlyphSelectMode
+							+ " text=" + glyphPreview);
+						root.xochitlTranslateTraceSelection("glyphs-selected",
+							"len=" + (text ? text.length : 0)
+							+ " rect=" + glyphRect
+							+ " stillSelecting=" + (strokeHandler.lineTool == Line.SelectionTool)
+							+ " text=" + glyphPreview);
+					} catch (glyphDebugError) {
+					}
+				if (root.glyphSelection
+						&& !root.glyphSelection.selectionBoundingRect.isEmpty
+						&& (strokeHandler.lineTool == Line.SelectionTool || root.xochitlTranslateGlyphSelectMode)) {
+					strokeHandler.setSelectionActive(true);
+					root.glyphSelection.open();
+				}
+			}
+		END REBUILD
+			END TRAVERSE
+		END AFFECT
+
+AFFECT [[15977735761668523171]]
+	TRAVERSE ?#[[6504254477]]
+	LOCATE BEFORE ALL
+	REBUILD [[8399947697665748998]]
+	LOCATE BEFORE ALL
+	INSERT { !xochitlTranslatingSelection && }
+	END REBUILD
+	LOCATE BEFORE [[233724020120234]]
+		INSERT {
+		property var xochitlTranslateTextFn: null
+		property ~&6503679477&~ xochitlTranslatingSelection: ~&214625660372&~
+		property string xochitlTranslateSelectedBackend: ""
+		function xochitlTranslateWriteText(text, backend) {
+			var cleanText = (text || "").replace(/\n/g, " ").trim();
+			if (xochitlTranslateTextFn) {
+				xochitlTranslateTextFn(cleanText, backend || xochitlTranslateSelectedBackend);
+				return;
+			}
+			var debugReq = new XMLHttpRequest();
+			debugReq.open("PUT", "file:///tmp/xochitl-translate-command-debug.txt");
+			debugReq.send("central translate callback missing");
+		}
+		function xochitlTranslateFrom(~&214629893131&~, backend) {
+			xochitlTranslateSelectedBackend = backend || "";
+			xochitlTranslatingSelection = ~&6504329801&~;
+			~&8398536573969953217&~.~&15319355904852707254&~(~&214629893131&~, ~&7712198086779994&~.~&5671208228825160146&~);
+		}
+
+	}
+	END TRAVERSE
+	TRAVERSE ?#[[742117811095419965]]
+	REBUILD [[12940955005542131354]]
+	LOCATE AFTER STREAM / { /
+	INSERT {
+	~&5972376&~(xochitlTranslatingSelection) {
+		~&5972376&~(!~&7713012755563699&~) {
+			~&7083121450889&~;
+		}
+		xochitlTranslateWriteText(~&3875029581909304837&~.plainText, xochitlTranslateSelectedBackend);
+		xochitlTranslatingSelection = ~&214625660372&~;
+		root.close();
+		~&7083121450889&~;
+	}
+	}
+	END REBUILD
+	END TRAVERSE
+END AFFECT
+
+AFFECT [[2170432337220872387]]
+	TRAVERSE ?#root
+	LOCATE AFTER selectedText
+	INSERT {
+		property var xochitlTranslateTextFn: null
+	}
+	END TRAVERSE
+	TRAVERSE ?#[[10742505294233132260]]
+	LOCATE AFTER ALL
+	INSERT {
+		property bool xochitlTranslateBackendMenuVisible: false
+		function xochitlTranslateWriteText(text, backend) {
+			var cleanText = (text || "").replace(/\n/g, " ").trim();
+			if (root.xochitlTranslateTextFn) {
+				root.xochitlTranslateTextFn(cleanText, backend);
+				return;
+			}
+			var debugReq = new XMLHttpRequest();
+			debugReq.open("PUT", "file:///tmp/xochitl-translate-command-debug.txt");
+			debugReq.send("central translate callback missing");
+		}
+		~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+			~&5972374&~: glyphSelectionTranslate
+			~&481641799955318521&~: ~&5971598&~.~&233696851602406&~
+			~&6504337259&~: ~&10742505294233132260&~.~&6504337259&~
+			~&6504315758&~: "Translate"
+			~&8399601734642709923&~: "qrc:/icons/sparkles.svg"
+			~&254542236275632405&~: {
+				~&10742505294233132260&~.xochitlTranslateWriteText(~&16536305558369206583&~);
+				~&10742505294233132260&~.xochitlTranslateBackendMenuVisible = false;
+				root.close();
+			}
+		}
+	}
+	END TRAVERSE
+END AFFECT
+
+AFFECT [[3708437855669237819]]
+	TRAVERSE ?#root
+	LOCATE AFTER availableSceneRect
+	INSERT {
+		property var xochitlTranslateTextFn: null
+	}
+	END TRAVERSE
+	TRAVERSE ?#[[738928733275563153]] > [[12395602925408354507]]
+	LOCATE AFTER [[16513464771895549213]]#[[496330270324752866]]
+	INSERT {
+		visible: !xochitlTranslatingSelection
+		property ~&197102514&~ xochitlTranslateClipboard: ~&254550717068498203&~
+		property ~&6503679477&~ xochitlTranslatingSelection: ~&214625660372&~
+		property ~&6503679477&~ xochitlTranslateBackendMenuVisible: ~&214625660372&~
+		property string xochitlTranslateSelectedBackend: ""
+		function xochitlTranslateWriteText(text, backend) {
+			var cleanText = (text || "").replace(/\n/g, " ").trim();
+			if (root.xochitlTranslateTextFn) {
+				root.xochitlTranslateTextFn(cleanText, backend || xochitlTranslateSelectedBackend);
+				return;
+			}
+			var debugReq = new XMLHttpRequest();
+			debugReq.open("PUT", "file:///tmp/xochitl-translate-command-debug.txt");
+			debugReq.send("central translate callback missing");
+		}
+		function xochitlTranslateStartSelection(backend) {
+			xochitlTranslateSelectedBackend = backend || "";
+			xochitlTranslateClipboard = ~&254480318283987577&~.~&6504315758&~;
+			xochitlTranslatingSelection = ~&6504329801&~;
+			xochitlTranslateBackendMenuVisible = ~&214625660372&~;
+			~&8399340108982949229&~.~&10756366413375378098&~();
+		}
+
+		~&16513464771895549213&~ {
+			~&5972374&~: translateSelectionButton
+			~&8399601734642709923&~: "qrc:/icons/sparkles.svg"
+			~&6504315758&~: "Translate"
+			~&233748328658231&~: ~&8399340108982949229&~.~&15974515710717949451&~
+			~&7713561545874130&~: ~&214625660372&~
+			~&254542236275632405&~: xochitlTranslateStartSelection()
+		}
+		~&428051690305612204&~ {
+			~&7083194890448&~: ~&8399340108982949229&~
+
+			function ~&16346808361226786719&~() {
+				~&5972376&~(!xochitlTranslatingSelection) ~&7083121450889&~;
+
+				xochitlTranslateWriteText(~&254480318283987577&~.textString(), xochitlTranslateSelectedBackend);
+
+				~&254480318283987577&~.~&6504315758&~ = xochitlTranslateClipboard;
+				xochitlTranslateClipboard = ~&254550717068498203&~;
+				xochitlTranslatingSelection = ~&214625660372&~;
+				root.close();
+			}
+		}
+	}
+	END TRAVERSE
+END AFFECT

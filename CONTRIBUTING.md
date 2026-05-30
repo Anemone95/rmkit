@@ -13,7 +13,7 @@ rmkit-cn 是面向 reMarkable 用户的中文化 / IME / AI 工具集. 本文规
 - Python 3
 - `gh` CLI (用于 PR / repo 管理)
 - USB-C 连接 reMarkable 设备
-- ssh 到 `root@10.11.99.1` 已配通
+- `ssh remarkable` 已配通
 
 ---
 
@@ -78,7 +78,7 @@ xochitl 的 drop-in (`xochitl.service.d/zz-rmkit-cn.conf`) 改之前必读
 
 升级 reMarkable 系统大版本时:
 1. 先在设备上跑 xovi 自带的 `rebuild_hashtable` (重新生成新版本的 hashtab)
-2. `scp root@10.11.99.1:/home/root/xovi/exthome/qt-resource-rebuilder/hashtab tools/hashtabs/hashtab-<机型>-<版本>`
+2. `scp remarkable:/home/root/xovi/exthome/qt-resource-rebuilder/hashtab tools/hashtabs/hashtab-<机型>-<版本>`
 3. 跑 `dist/qmd-tool check` 看 qmd 是否还命中
 4. 不命中 → 改 qmd-src 重编
 

@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 )
 
 // /ai-page-chat
 //
 // 输入: {"prompt": "...完整 prompt, 客户端已经拼好 (含选中文字等上下文)..."}
-// 行为: 纯转发, 直接把 prompt 流式调 AI; 不再扫 .rm 文件 / 不再依赖 rmscene.
+// 行为: 纯转发, 直接把 prompt 流式调 AI; 不再在服务器端扫描 .rm 文件.
 //       (改造前: 客户端只发 prompt_prefix, 服务器扫 .rm 拼整页 text — 但 .rm 不实时刷新,
 //        用户必须等几秒才能点 AI; 改成客户端从 Clipboard 拿选中文字自己拼 prompt 后即时.)
 // 输出: NDJSON 流, 每行一个 JSON 对象:
@@ -34,14 +33,8 @@ func (s *Server) aiPageChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := defaultAIConfig()
-	if data, err := os.ReadFile(AIConfigPath); err == nil {
-		var disk aiConfig
-		if json.Unmarshal(data, &disk) == nil {
-			cfg = disk
-		}
-	}
-	if cfg.Key == "" {
+	cfg := s.readAIConfig()
+	if !isCodexKind(cfg.Kind) && cfg.Key == "" {
 		httpError(w, http.StatusBadRequest, "未配置 API Key, 请先在「高级 → AI 设置」填写")
 		return
 	}

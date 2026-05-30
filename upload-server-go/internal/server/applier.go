@@ -25,11 +25,6 @@ import (
 //
 // detectActiveFont 直接读 FontsActiveDir 第一个 .ttf/.otf 文件名作为激活态.
 
-func (s *Server) activeFont(w http.ResponseWriter, r *http.Request) {
-	name := s.detectActiveFont()
-	writeJSON(w, http.StatusOK, map[string]any{"name": name})
-}
-
 func (s *Server) detectActiveFont() string {
 	entries, err := os.ReadDir(s.cfg.FontsActiveDir)
 	if err != nil {
@@ -46,28 +41,6 @@ func (s *Server) detectActiveFont() string {
 		return e.Name()
 	}
 	return ""
-}
-
-func (s *Server) applyFont(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	applied, err := s.applyFontInternal(name)
-	if err != nil {
-		httpError(w, applyFontStatus(err), err.Error())
-		return
-	}
-	go func() {
-		if path, err := exec.LookPath("fc-cache"); err == nil {
-			_ = exec.Command(path, "-f").Run()
-		}
-		time.Sleep(500 * time.Millisecond)
-		if path, err := exec.LookPath("systemctl"); err == nil {
-			_ = exec.Command(path, "restart", "xochitl").Run()
-		}
-	}()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"applied": applied,
-		"restart": true,
-	})
 }
 
 // applyFontInternal 执行字体启用的所有文件系统操作, 不重启 xochitl, 不刷 fc-cache.
@@ -182,13 +155,6 @@ func copyFile(src, dst string) error {
 
 const sleepScreenKey = "SleepScreenPath"
 
-// activeScreen 解析 xochitl.conf, 返回当前 SleepScreenPath 指向的文件 basename
-// (仅当文件落在 ScreensDir 内时报告, 否则返回空; 这样未配置或指系统默认时都返回空).
-func (s *Server) activeScreen(w http.ResponseWriter, r *http.Request) {
-	name := s.detectActiveScreen()
-	writeJSON(w, http.StatusOK, map[string]any{"name": name})
-}
-
 func (s *Server) detectActiveScreen() string {
 	path := readSleepScreenPath(s.cfg.XochitlConf)
 	if path == "" {
@@ -199,25 +165,6 @@ func (s *Server) detectActiveScreen() string {
 		return ""
 	}
 	return filepath.Base(path)
-}
-
-func (s *Server) applyScreen(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	applied, err := s.applyScreenInternal(name)
-	if err != nil {
-		httpError(w, applyFontStatus(err), err.Error())
-		return
-	}
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		if path, err := exec.LookPath("systemctl"); err == nil {
-			_ = exec.Command(path, "restart", "xochitl").Run()
-		}
-	}()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"applied": applied,
-		"restart": true,
-	})
 }
 
 // applyScreenInternal 执行壁纸启用的文件系统/conf 操作, 不重启 xochitl. 返回 basename.
@@ -329,7 +276,25 @@ func (s *Server) previewScreen(w http.ResponseWriter, r *http.Request) {
 // 我们这里直接 fire-and-forget: 起一个独立进程组的 koreader.sh, HTTP 立即返回.
 // 不等待退出, 也不需要清理 (xochitl 仍在跑).
 
-const koreaderScript = "/home/root/xovi/exthome/appload/koreader/koreader.sh"
+const (
+	koreaderScript = "/home/root/xovi/exthome/appload/koreader/koreader.sh"
+	qtfbShimPath   = "/home/root/shims/qtfb-shim.so"
+)
+
+func koreaderEnv(base []string) []string {
+	cleaned := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "LD_PRELOAD=") ||
+			strings.HasPrefix(kv, "QTFB_SHIM_MODE=") {
+			continue
+		}
+		cleaned = append(cleaned, kv)
+	}
+	return append(cleaned,
+		"LD_PRELOAD="+qtfbShimPath,
+		"QTFB_SHIM_MODE=N_RGB565",
+	)
+}
 
 func (s *Server) launchKoreader(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.Stat(koreaderScript); err != nil {
@@ -342,21 +307,7 @@ func (s *Server) launchKoreader(w http.ResponseWriter, r *http.Request) {
 	// RMPP 上 KOReader 必须经 qtfb-shim 转发到 xochitl 内嵌的 QTFB server.
 	// 清掉 xochitl 继承下来的 LD_PRELOAD (xovi.so + ime_hook.so), 单独把
 	// qtfb-shim.so 注入给 KOReader, 并设置 N_RGB565 (KOReader device.lua 强校验).
-	shimPath := filepath.Join(filepath.Dir(koreaderScript), "libs/qtfb-shim.so")
-	env := os.Environ()
-	cleaned := env[:0]
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "LD_PRELOAD=") ||
-			strings.HasPrefix(kv, "QTFB_SHIM_MODE=") {
-			continue
-		}
-		cleaned = append(cleaned, kv)
-	}
-	cleaned = append(cleaned,
-		"LD_PRELOAD="+shimPath,
-		"QTFB_SHIM_MODE=N_RGB565",
-	)
-	cmd.Env = cleaned
+	cmd.Env = koreaderEnv(os.Environ())
 	// 独立进程组, 让 KOReader 不随 upload-server 退出而中止
 	cmd.SysProcAttr = newSessionLeader()
 

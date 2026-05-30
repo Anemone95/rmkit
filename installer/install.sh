@@ -4,15 +4,22 @@
 # 用法：bash install.sh [--uninstall]
 set -euo pipefail
 
-DEVICE_IP="${DEVICE_IP:-10.11.99.1}"
-DEVICE_USER="root"
+DEVICE_TARGET="${DEVICE_TARGET:-${DEVICE:-remarkable}}"
 REMOTE_BASE="/home/root/rmkit-cn"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+KOREADER_STAGE="${KOREADER_STAGE:-$SCRIPT_DIR/../stage/koreader}"
+APLOAD_STAGE="${APLOAD_STAGE:-$SCRIPT_DIR/vendor/appload}"
+[ -d "$APLOAD_STAGE" ] || APLOAD_STAGE="$SCRIPT_DIR/../downloads/inspect/appload"
+COMMAND_EXECUTOR_SO="${COMMAND_EXECUTOR_SO:-$SCRIPT_DIR/../downloads/inspect/xovi/inactive-extensions/qt-command-executor.so}"
+BERGAMOT_BIN="${BERGAMOT_BIN:-$SCRIPT_DIR/../xochitl-research-src/bergamot-translator/build-aarch64-rm/app/bergamot}"
+BERGAMOT_MODEL_DIR="${BERGAMOT_MODEL_DIR:-$SCRIPT_DIR/../xochitl-translate/models/bergamot/enzh}"
+# shellcheck source=installer/qmd-artifacts.sh
+source "$SCRIPT_DIR/installer/qmd-artifacts.sh"
 
 # ─── 卸载模式 ───────────────────────────────────────────────
 if [[ "${1:-}" == "--uninstall" ]]; then
   echo "=== rmkit-cn 卸载 ==="
-  ssh "$DEVICE_USER@$DEVICE_IP" "
+  ssh "$DEVICE_TARGET" "
     systemctl stop    rmkit-cn-upload.service rmkit-cn-version.path rmkit-cn-ime-http.service 2>/dev/null || true
     systemctl disable rmkit-cn-upload.service rmkit-cn-version.path rmkit-cn-ime-http.service 2>/dev/null || true
     # 历史 Python IME unit (现已归档到 legacy/ime-py/), 老设备上可能残留, 一并清
@@ -37,10 +44,14 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f /home/root/xovi/exthome/qt-resource-rebuilder/advanced_panel.qmd
     rm -f /home/root/xovi/exthome/qt-resource-rebuilder/language_zh_cn.qmd
     rm -f /home/root/xovi/exthome/qt-resource-rebuilder/ai_text_button.qmd
+    rm -f /home/root/xovi/exthome/qt-resource-rebuilder/glyph_selection_ai.qmd
+    rm -f /home/root/xovi/exthome/qt-resource-rebuilder/translateSelection-3.27.qmd
     rm -f /home/root/xovi/exthome/qt-resource-rebuilder/zh_CN.rcc
     rm -rf /home/root/xovi/exthome/qt-resource-rebuilder/zh_CN
     # 清理 xovi 扩展
     rm -f /home/root/xovi/extensions.d/librarian.so /home/root/xovi/extensions.d/xovi-message-broker.so
+    rm -f /home/root/xovi/extensions.d/qt-command-executor.so
+    rm -rf /home/root/xovi/bergamot /home/root/xovi/translate-text-layer /home/root/xovi/translate-codex-sessions
     # 清理中文翻译 qm
     mount -o remount,rw / 2>/dev/null || true
     rm -f /usr/share/remarkable/xochitl/translations/reMarkable_zh_CN.qm
@@ -55,8 +66,8 @@ fi
 echo "=== rmkit-cn 安装程序 ==="
 echo ""
 echo "请确认："
-echo "  1. 已用 USB 线连接 reMarkable"
-echo "  2. Settings → General → About → Copyrights 最底部可找到 SSH 密码"
+echo "  1. 已配置 ssh remarkable 可连接 reMarkable"
+echo "  2. 如需使用其它目标，可设置 DEVICE_TARGET=root@10.11.99.1"
 echo ""
 read -rp "按 Enter 继续，或 Ctrl+C 退出..."
 
@@ -69,15 +80,15 @@ done
 
 # ─── 连接并检测设备 ──────────────────────────────────────────
 echo ""
-echo "正在连接设备 $DEVICE_IP..."
-ssh -o ConnectTimeout=10 "$DEVICE_USER@$DEVICE_IP" "echo '连接成功'" || {
-  echo "错误：无法连接设备，请确认 USB 已连接且 SSH 已启用" >&2
+echo "正在连接设备 $DEVICE_TARGET..."
+ssh -o ConnectTimeout=10 "$DEVICE_TARGET" "echo '连接成功'" || {
+  echo "错误：无法连接设备，请确认 ssh $DEVICE_TARGET 可连接" >&2
   exit 1
 }
 
-ARCH=$(ssh "$DEVICE_USER@$DEVICE_IP" "uname -m")
-FW_VERSION=$(ssh "$DEVICE_USER@$DEVICE_IP" "cat /etc/version 2>/dev/null | head -n 1 | tr -d '[:space:]'")
-RESOLUTION=$(ssh "$DEVICE_USER@$DEVICE_IP" "cat /sys/class/graphics/fb0/virtual_size 2>/dev/null || echo 'unknown'" || echo "unknown")
+ARCH=$(ssh "$DEVICE_TARGET" "uname -m")
+FW_VERSION=$(ssh "$DEVICE_TARGET" "cat /etc/version 2>/dev/null | head -n 1 | tr -d '[:space:]'")
+RESOLUTION=$(ssh "$DEVICE_TARGET" "cat /sys/class/graphics/fb0/virtual_size 2>/dev/null || echo 'unknown'" || echo "unknown")
 
 echo "设备架构：$ARCH"
 echo "固件版本：$FW_VERSION"
@@ -96,22 +107,26 @@ echo "检测到设备：$DEVICE_MODEL"
 
 # ─── 选架构对应二进制/扩展 ───────────────────────────────────
 case "$ARCH" in
-  aarch64)
-    UPLOAD_BIN_NAME="upload-server-aarch64"
-    IME_BIN_NAME="ime-server"
-    IME_HOOK_NAME="ime_hook.so"
-    EXT_ARCH="aarch64"             # vendor/extensions/*-aarch64.so
-    XOVI_ARCH="aarch64"            # vendor/xovi/xovi-aarch64.tar.gz
-    QMD_TOOL_NAME="qmd-tool-aarch64"
-    ;;
-  armv7l)
-    UPLOAD_BIN_NAME="upload-server-armv7"
-    IME_BIN_NAME="ime-server-armv7"
-    IME_HOOK_NAME="ime_hook-armv7.so"
-    EXT_ARCH="armv7"               # vendor/extensions/*-armv7.so
-    XOVI_ARCH="arm32"              # vendor/xovi/xovi-arm32.tar.gz (xovi 上游用 arm32 命名)
-    QMD_TOOL_NAME="qmd-tool-armv7"
-    ;;
+	  aarch64)
+	    UPLOAD_BIN_NAME="upload-server-aarch64"
+	    TEXT_LAYER_SIDECAR_BIN_NAME="text-layer-sidecar-aarch64"
+	    IME_BIN_NAME="ime-server"
+	    IME_HOOK_NAME="ime_hook.so"
+	    EXT_ARCH="aarch64"             # vendor/extensions/*-aarch64.so
+	    XOVI_ARCH="aarch64"            # vendor/xovi/xovi-aarch64.tar.gz
+	    QMD_TOOL_NAME="qmd-tool-aarch64"
+	    GO_ARCH_TARGET="aarch64"
+	    ;;
+	  armv7l)
+	    UPLOAD_BIN_NAME="upload-server-armv7"
+	    TEXT_LAYER_SIDECAR_BIN_NAME="text-layer-sidecar-armv7"
+	    IME_BIN_NAME="ime-server-armv7"
+	    IME_HOOK_NAME="ime_hook-armv7.so"
+	    EXT_ARCH="armv7"               # vendor/extensions/*-armv7.so
+	    XOVI_ARCH="arm32"              # vendor/xovi/xovi-arm32.tar.gz (xovi 上游用 arm32 命名)
+	    QMD_TOOL_NAME="qmd-tool-armv7"
+	    GO_ARCH_TARGET="armv7"
+	    ;;
   *)
     echo "✗ 不支持的架构: $ARCH (本项目仅支持 aarch64 / armv7l)" >&2
     exit 1
@@ -125,12 +140,16 @@ DIST_DIR_CHECK="$SCRIPT_DIR/dist"
 DIST_RELEASE_URL="${DIST_RELEASE_URL:-https://github.com/boangs/rmkit/releases/latest/download/dist.tar.gz}"
 NEED_FILES=(
   "$DIST_DIR_CHECK/$UPLOAD_BIN_NAME"
+  "$DIST_DIR_CHECK/$TEXT_LAYER_SIDECAR_BIN_NAME"
   "$DIST_DIR_CHECK/$IME_BIN_NAME"
   "$DIST_DIR_CHECK/$IME_HOOK_NAME"
   "$DIST_DIR_CHECK/$QMD_TOOL_NAME"
   "$DIST_DIR_CHECK/reMarkable_zh_CN.qm"
   "$DIST_DIR_CHECK/zh_CN.rcc"
 )
+if [ "$ARCH" = "aarch64" ]; then
+  NEED_FILES+=("$DIST_DIR_CHECK/poppler-aarch64/bin/pdftotext.real")
+fi
 DIST_OK=1
 for f in "${NEED_FILES[@]}"; do
   [ -f "$f" ] || { DIST_OK=0; break; }
@@ -151,15 +170,32 @@ if [ "$DIST_OK" = "0" ]; then
   tar -xzf "$TMP_TGZ" -C "$DIST_DIR_CHECK"
   chmod +x "$DIST_DIR_CHECK"/* 2>/dev/null || true
   rm -f "$TMP_TGZ"; trap - EXIT
-  echo "  ✓ 预编译产物已就绪"
-fi
+	  echo "  ✓ 预编译产物已就绪"
+	fi
+
+	if [ ! -f "$DIST_DIR_CHECK/$TEXT_LAYER_SIDECAR_BIN_NAME" ]; then
+	  if command -v go >/dev/null 2>&1; then
+	    echo ""
+	    echo "text-layer-sidecar 缺失, 正在本地构建 $TEXT_LAYER_SIDECAR_BIN_NAME..."
+	    (cd "$SCRIPT_DIR/upload-server-go" && make "text-layer-$GO_ARCH_TARGET")
+	  else
+	    echo "✗ 缺失: $DIST_DIR_CHECK/$TEXT_LAYER_SIDECAR_BIN_NAME 且本机没有 go，无法构建" >&2
+	    exit 1
+	  fi
+	fi
+
+	if [ "$ARCH" = "aarch64" ] && [ ! -x "$DIST_DIR_CHECK/poppler-aarch64/bin/pdftotext.real" ]; then
+	  echo ""
+	  echo "pdftotext runtime 缺失, 正在下载 Debian arm64 poppler-utils..."
+	  "$SCRIPT_DIR/scripts/fetch-poppler-utils-aarch64.sh" "$DIST_DIR_CHECK/poppler-aarch64"
+	fi
 
 # ─── xovi 自动部署 (全新设备 / 出厂 reset 后必备) ──────────────
 # install.sh 装的 .qmd 注入和 LD_PRELOAD 都依赖 /home/root/xovi/xovi.so 存在,
 # 缺失时不能直接装 drop-in (xochitl crash → A/B 回滚)。先无条件确保 xovi 在位。
 echo ""
 echo "正在检查 xovi..."
-HAVE_XOVI=$(ssh "$DEVICE_USER@$DEVICE_IP" "[ -f /home/root/xovi/xovi.so ] && echo yes || echo no")
+HAVE_XOVI=$(ssh "$DEVICE_TARGET" "[ -f /home/root/xovi/xovi.so ] && echo yes || echo no")
 if [ "$HAVE_XOVI" = "no" ]; then
   XOVI_TARBALL="$SCRIPT_DIR/vendor/xovi/xovi-${XOVI_ARCH}.tar.gz"
   XOVI_LAUNCHER="$SCRIPT_DIR/vendor/xovi/xochitl-xovi"
@@ -169,8 +205,8 @@ if [ "$HAVE_XOVI" = "no" ]; then
     exit 1
   fi
   echo "  设备无 xovi, 自动部署中..."
-  scp -q "$XOVI_TARBALL" "$XOVI_LAUNCHER" "$DEVICE_USER@$DEVICE_IP:/tmp/"
-  ssh "$DEVICE_USER@$DEVICE_IP" "set -e
+  scp -q "$XOVI_TARBALL" "$XOVI_LAUNCHER" "$DEVICE_TARGET:/tmp/"
+  ssh "$DEVICE_TARGET" "set -e
     cd /home/root
     tar -xzf /tmp/xovi-${XOVI_ARCH}.tar.gz --no-same-owner --no-same-permissions
     cp /tmp/xochitl-xovi /home/root/xovi/xochitl-xovi
@@ -221,6 +257,14 @@ DIST_DIR="$SCRIPT_DIR/dist"
 HASH_TOOL="$SCRIPT_DIR/dist/qmd-tool"
 HASHTAB_LOCAL="$SCRIPT_DIR/tools/hashtab"
 
+local_md5() {
+  if command -v md5sum >/dev/null 2>&1; then
+    md5sum "$1" | cut -d' ' -f1
+  else
+    md5 -q "$1"
+  fi
+}
+
 if [ -d "$QMD_SRC_DIR" ]; then
   if [ ! -x "$HASH_TOOL" ]; then
     echo "✗ 致命: $HASH_TOOL 不存在或不可执行" >&2
@@ -243,18 +287,18 @@ if [ -d "$QMD_SRC_DIR" ]; then
 
   echo ""
   echo "正在检查设备 hashtab..."
-  REMOTE_HASHTAB=$(ssh "$DEVICE_USER@$DEVICE_IP" "ls -d /home/root/xovi/exthome/qt-resource-rebuilder*/hashtab 2>/dev/null | head -n 1" || true)
+  REMOTE_HASHTAB=$(ssh "$DEVICE_TARGET" "ls -d /home/root/xovi/exthome/qt-resource-rebuilder*/hashtab 2>/dev/null | head -n 1" || true)
   NEED_RECOMPILE=true
   if [ -n "$REMOTE_HASHTAB" ]; then
     # 对比本地和远端 hashtab md5，相同则跳过重编
-    REMOTE_MD5=$(ssh "$DEVICE_USER@$DEVICE_IP" "md5sum '$REMOTE_HASHTAB' 2>/dev/null | cut -d' ' -f1" || true)
+    REMOTE_MD5=$(ssh "$DEVICE_TARGET" "md5sum '$REMOTE_HASHTAB' 2>/dev/null | cut -d' ' -f1" || true)
     LOCAL_MD5=""
-    [ -f "$HASHTAB_LOCAL" ] && LOCAL_MD5=$(md5sum "$HASHTAB_LOCAL" 2>/dev/null | cut -d' ' -f1 || true)
+    [ -f "$HASHTAB_LOCAL" ] && LOCAL_MD5=$(local_md5 "$HASHTAB_LOCAL" 2>/dev/null || true)
     if [ -n "$REMOTE_MD5" ] && [ "$REMOTE_MD5" = "$LOCAL_MD5" ]; then
-      echo "  → hashtab 未变化，跳过重编 (使用缓存 dist/*.qmd)"
+      echo "  → hashtab 未变化"
       NEED_RECOMPILE=false
     else
-      scp -q "$DEVICE_USER@$DEVICE_IP:$REMOTE_HASHTAB" "$HASHTAB_LOCAL"
+      scp -q "$DEVICE_TARGET:$REMOTE_HASHTAB" "$HASHTAB_LOCAL"
       echo "  → tools/hashtab 已同步设备版本 ($REMOTE_HASHTAB)"
     fi
   elif [ -f "$HASHTAB_LOCAL" ]; then
@@ -262,6 +306,19 @@ if [ -d "$QMD_SRC_DIR" ]; then
   else
     echo "✗ 致命: tools/hashtab 不存在且未能从设备同步, 也无可用种子" >&2
     exit 1
+  fi
+
+  if [ "$NEED_RECOMPILE" = "false" ]; then
+    for src in "$QMD_SRC_DIR"/*.qmd; do
+      [ -f "$src" ] || continue
+      out="$DIST_DIR/$(basename "$src")"
+      if [ ! -f "$out" ] || [ "$src" -nt "$out" ]; then
+        echo "  → qmd-src 有更新，重编 dist/*.qmd"
+        NEED_RECOMPILE=true
+        break
+      fi
+    done
+    [ "$NEED_RECOMPILE" = "true" ] || echo "  → qmd-src 未变化，使用缓存 dist/*.qmd"
   fi
 
   if [ "$NEED_RECOMPILE" = "true" ]; then
@@ -297,21 +354,36 @@ qmd_is_valid() {
   esac
   return 0
 }
-for qmd in advanced_panel.qmd language_zh_cn.qmd ai_text_button.qmd; do
+for qmd in "${RMKIT_COMPILED_QMDS[@]}"; do
   qmd_is_valid "$SCRIPT_DIR/dist/$qmd" || {
     echo "✗ dist/$qmd 校验失败 (空文件 / traceback / 损坏), 中止部署" >&2
+    exit 1
+  }
+done
+for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+  qmd_is_valid "$SCRIPT_DIR/qmd/$qmd" || {
+    echo "✗ qmd/$qmd 校验失败 (缺失 / 空文件 / traceback / 损坏), 中止部署" >&2
     exit 1
   }
 done
 
 # ─── 校验所有需部署的 binary 在本地都存在 ───────────────────────
 DIST_DIR="$SCRIPT_DIR/dist"
-for f in "$DIST_DIR/$UPLOAD_BIN_NAME" "$DIST_DIR/$IME_BIN_NAME" "$DIST_DIR/$IME_HOOK_NAME" \
-         "$DIST_DIR/$QMD_TOOL_NAME" \
+for f in "$DIST_DIR/$UPLOAD_BIN_NAME" "$DIST_DIR/$TEXT_LAYER_SIDECAR_BIN_NAME" \
+         "$DIST_DIR/$IME_BIN_NAME" "$DIST_DIR/$IME_HOOK_NAME" "$DIST_DIR/$QMD_TOOL_NAME" \
          "$SCRIPT_DIR/vendor/extensions/librarian-${EXT_ARCH}.so" \
          "$SCRIPT_DIR/vendor/extensions/xovi-message-broker-${EXT_ARCH}.so"; do
   [ -f "$f" ] || { echo "✗ 缺失: $f" >&2; exit 1; }
 done
+if [ ! -f "$COMMAND_EXECUTOR_SO" ]; then
+  echo "✗ 缺失: $COMMAND_EXECUTOR_SO" >&2
+  echo "  translateSelection-3.27.qmd 需要 qt-command-executor.so, 不能跳过部署" >&2
+  exit 1
+fi
+if [ "$ARCH" = "aarch64" ] && [ ! -x "$DIST_DIR/poppler-aarch64/bin/pdftotext.real" ]; then
+  echo "✗ 缺失: $DIST_DIR/poppler-aarch64/bin/pdftotext.real" >&2
+  exit 1
+fi
 
 # ─── 构造本地 staging (镜像设备文件树) ─────────────────────────
 # 把所有要部署的文件复制到 staging 临时目录, 按设备真实路径组织,
@@ -323,27 +395,49 @@ trap 'rm -rf "$PAYLOAD"' EXIT
 
 mkdir -p \
   "$PAYLOAD/home/root/rmkit-cn/bin" \
+  "$PAYLOAD/home/root/rmkit-cn/poppler/bin" \
+  "$PAYLOAD/home/root/rmkit-cn/poppler/lib" \
   "$PAYLOAD/home/root/rmkit-cn/upload-server/static" \
   "$PAYLOAD/home/root/rmkit-cn/qmd/zh_CN" \
   "$PAYLOAD/home/root/rmkit-cn/qmd-src" \
   "$PAYLOAD/home/root/rmkit-cn/compiled-qmd/$FW_VERSION" \
   "$PAYLOAD/home/root/rmkit-cn/static" \
+  "$PAYLOAD/home/root/shims" \
+  "$PAYLOAD/home/root/xovi/bergamot/enzh" \
+  "$PAYLOAD/home/root/xovi/exthome/appload" \
   "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/chess" \
   "$PAYLOAD/home/root/xovi/extensions.d" \
+  "$PAYLOAD/home/root/xovi/translate-text-layer" \
   "$PAYLOAD/usr/share/remarkable/xochitl/translations" \
   "$PAYLOAD/tmp/rmkit-cn-systemd-staging"
 
-# /home/root/rmkit-cn/bin/  Go binary + IME hook .so + version-switcher
+# /home/root/rmkit-cn/bin/  Go binary + IME hook .so + OTA helpers
 # 注: scripts/apply-font.sh / apply-screen.sh 不再部署到设备 — 用户态字体
 # 与屏幕已经由 upload-server web UI 接管, 这两个脚本只在仓库 scripts/ 留给
 # 开发者本地引用 (设备上没人调用过它们).
-cp "$SCRIPT_DIR/scripts/version-switcher.sh" "$PAYLOAD/home/root/rmkit-cn/bin/"
 cp "$SCRIPT_DIR/installer/reenable.sh"    "$PAYLOAD/home/root/rmkit-cn/bin/reenable.sh"
 cp "$SCRIPT_DIR/installer/fw-upgrade.sh"  "$PAYLOAD/home/root/rmkit-cn/bin/fw-upgrade.sh"
+cp "$SCRIPT_DIR/installer/qmd-artifacts.sh" "$PAYLOAD/home/root/rmkit-cn/bin/qmd-artifacts.sh"
 cp "$DIST_DIR/$IME_BIN_NAME"  "$PAYLOAD/home/root/rmkit-cn/bin/ime-server"
 cp "$DIST_DIR/$IME_HOOK_NAME" "$PAYLOAD/home/root/rmkit-cn/bin/ime_hook.so"
 cp "$DIST_DIR/$QMD_TOOL_NAME" "$PAYLOAD/home/root/rmkit-cn/bin/qmd-tool"
+cp "$DIST_DIR/$TEXT_LAYER_SIDECAR_BIN_NAME" "$PAYLOAD/home/root/rmkit-cn/bin/text-layer-sidecar"
+cat > "$PAYLOAD/home/root/rmkit-cn/bin/pdftotext" <<'EOF'
+#!/bin/sh
+if [ ! -x /home/root/rmkit-cn/poppler/bin/pdftotext.real ]; then
+  echo "pdftotext runtime is not installed for this architecture" >&2
+  exit 127
+fi
+export LD_LIBRARY_PATH="/home/root/rmkit-cn/poppler/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec /home/root/rmkit-cn/poppler/bin/pdftotext.real "$@"
+EOF
 chmod +x "$PAYLOAD/home/root/rmkit-cn/bin/"*
+if [ "$ARCH" = "aarch64" ]; then
+  cp "$DIST_DIR/poppler-aarch64/bin/pdftotext.real" "$PAYLOAD/home/root/rmkit-cn/poppler/bin/"
+  cp "$DIST_DIR"/poppler-aarch64/lib/* "$PAYLOAD/home/root/rmkit-cn/poppler/lib/"
+  chmod +x "$PAYLOAD/home/root/rmkit-cn/poppler/bin/pdftotext.real"
+  printf 'enabled\n' > "$PAYLOAD/home/root/rmkit-cn/text-layer-sidecar.enabled"
+fi
 
 # qmd-src/: fw-upgrade.sh 在 OTA 后从此重编
 for qmd in "$QMD_SRC_DIR"/*.qmd; do
@@ -355,20 +449,25 @@ done
 #   rm -f $DEPLOY/*.qmd && cp $CACHE/*.qmd $DEPLOY/
 # 所以**所有**需要持久注入的 .qmd 都必须在 cache 里, 漏了会被 silent 删 (历史 bug:
 # 漏 pinyin_interceptor.qmd → 设备 restart 后没候选框)
-for qmd in advanced_panel.qmd language_zh_cn.qmd ai_text_button.qmd glyph_selection_ai.qmd; do
+for qmd in "${RMKIT_COMPILED_QMDS[@]}"; do
   [ -f "$DIST_DIR/$qmd" ] && cp "$DIST_DIR/$qmd" "$PAYLOAD/home/root/rmkit-cn/compiled-qmd/$FW_VERSION/"
 done
 # pinyin_interceptor.qmd 不走 qmd-src 重编 (是预 hash 化的 qmd/ 成品), 但也必须进 cache
-[ -f "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" ] && \
-  cp "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" "$PAYLOAD/home/root/rmkit-cn/compiled-qmd/$FW_VERSION/"
+for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+  cp "$SCRIPT_DIR/qmd/$qmd" "$PAYLOAD/home/root/rmkit-cn/compiled-qmd/$FW_VERSION/"
+done
 
 # static/: fw-upgrade.sh 的 deploy_static() 读取这些静态资源
-[ -f "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" ] && \
-  cp "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" "$PAYLOAD/home/root/rmkit-cn/static/"
-[ -f "$SCRIPT_DIR/qmd/zh_CN.rcc" ] && \
-  cp "$SCRIPT_DIR/qmd/zh_CN.rcc" "$PAYLOAD/home/root/rmkit-cn/static/"
-[ -f "$DIST_DIR/reMarkable_zh_CN.qm" ] && \
-  cp "$DIST_DIR/reMarkable_zh_CN.qm" "$PAYLOAD/home/root/rmkit-cn/static/"
+for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+  cp "$SCRIPT_DIR/qmd/$qmd" "$PAYLOAD/home/root/rmkit-cn/static/"
+done
+for file in "${RMKIT_STATIC_FILES[@]}"; do
+  if [ -f "$SCRIPT_DIR/qmd/$file" ]; then
+    cp "$SCRIPT_DIR/qmd/$file" "$PAYLOAD/home/root/rmkit-cn/static/"
+  elif [ -f "$DIST_DIR/$file" ]; then
+    cp "$DIST_DIR/$file" "$PAYLOAD/home/root/rmkit-cn/static/"
+  fi
+done
 
 # /home/root/rmkit-cn/upload-server/  Go binary + 静态 web
 cp "$DIST_DIR/$UPLOAD_BIN_NAME" "$PAYLOAD/home/root/rmkit-cn/upload-server/upload-server"
@@ -378,26 +477,70 @@ cp "$SCRIPT_DIR/upload-server-go/static/index.html" \
    "$PAYLOAD/home/root/rmkit-cn/upload-server/static/"
 
 # /home/root/rmkit-cn/qmd/  rmkit 自身参考用的中间存储 (排除 _obsolete/)
-[ -f "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" ] && \
-  cp "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" "$PAYLOAD/home/root/rmkit-cn/qmd/"
-[ -f "$SCRIPT_DIR/qmd/zh_CN.rcc" ] && \
-  cp "$SCRIPT_DIR/qmd/zh_CN.rcc" "$PAYLOAD/home/root/rmkit-cn/qmd/"
+for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+  cp "$SCRIPT_DIR/qmd/$qmd" "$PAYLOAD/home/root/rmkit-cn/qmd/"
+done
+for file in "${RMKIT_STATIC_FILES[@]}"; do
+  [ -f "$SCRIPT_DIR/qmd/$file" ] && cp "$SCRIPT_DIR/qmd/$file" "$PAYLOAD/home/root/rmkit-cn/qmd/"
+done
 [ -f "$SCRIPT_DIR/qmd/zh_CN/keyboard_layout.json" ] && \
   cp "$SCRIPT_DIR/qmd/zh_CN/keyboard_layout.json" "$PAYLOAD/home/root/rmkit-cn/qmd/zh_CN/"
 
 # /home/root/xovi/exthome/qt-resource-rebuilder/  qmldiff 真正加载位置
-for qmd in advanced_panel.qmd language_zh_cn.qmd ai_text_button.qmd; do
+for qmd in "${RMKIT_COMPILED_QMDS[@]}"; do
   cp "$DIST_DIR/$qmd" "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/"
 done
-[ -f "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" ] && \
-  cp "$SCRIPT_DIR/qmd/pinyin_interceptor.qmd" "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/"
-[ -f "$SCRIPT_DIR/qmd/zh_CN.rcc" ] && \
-  cp "$SCRIPT_DIR/qmd/zh_CN.rcc" "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/"
+for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+  cp "$SCRIPT_DIR/qmd/$qmd" "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/"
+done
+[ -f "$SCRIPT_DIR/qmd/zh_CN.rcc" ] && cp "$SCRIPT_DIR/qmd/zh_CN.rcc" "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/"
 
-# 棋类资源 (assets/chess/*.svg + *.png)
+# 高级面板图标资源 (assets/chess/*.svg + *.png)
 if [ -d "$SCRIPT_DIR/assets/chess" ]; then
-  cp "$SCRIPT_DIR/assets/chess/"*.svg "$SCRIPT_DIR/assets/chess/"*.png \
-     "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/chess/" 2>/dev/null || true
+  for asset in "$SCRIPT_DIR"/assets/chess/*.svg "$SCRIPT_DIR"/assets/chess/*.png; do
+    [ -f "$asset" ] || continue
+    cp "$asset" "$PAYLOAD/home/root/xovi/exthome/qt-resource-rebuilder/chess/"
+  done
+fi
+
+# /home/root/xovi/exthome/appload/koreader/  KOReader launcher payload
+if [ -d "$KOREADER_STAGE" ]; then
+  mkdir -p "$PAYLOAD/home/root/xovi/exthome/appload/koreader"
+  (cd "$KOREADER_STAGE" && tar -cf - .) | \
+    (cd "$PAYLOAD/home/root/xovi/exthome/appload/koreader" && tar -xf -)
+  chmod +x "$PAYLOAD/home/root/xovi/exthome/appload/koreader/koreader.sh" 2>/dev/null || true
+else
+  echo "警告: KOReader stage 不存在: $KOREADER_STAGE，跳过 KOReader 部署" >&2
+fi
+
+# /home/root/xovi/extensions.d/appload.so + /home/root/shims/qtfb-shim.so
+if [ -f "$APLOAD_STAGE/appload.so" ]; then
+  cp "$APLOAD_STAGE/appload.so" "$PAYLOAD/home/root/xovi/extensions.d/appload.so"
+  chmod +x "$PAYLOAD/home/root/xovi/extensions.d/appload.so"
+else
+  echo "警告: appload.so 不存在: $APLOAD_STAGE/appload.so，KOReader 启动器可能不可用" >&2
+fi
+if [ -f "$APLOAD_STAGE/shims/qtfb-shim.so" ]; then
+  cp "$APLOAD_STAGE/shims/qtfb-shim.so" "$PAYLOAD/home/root/shims/qtfb-shim.so"
+  chmod +x "$PAYLOAD/home/root/shims/qtfb-shim.so"
+else
+  echo "警告: qtfb-shim.so 不存在: $APLOAD_STAGE/shims/qtfb-shim.so，KOReader 可能无法接管屏幕" >&2
+fi
+
+# /home/root/xovi/extensions.d/qt-command-executor.so + Bergamot 本地翻译
+cp "$COMMAND_EXECUTOR_SO" "$PAYLOAD/home/root/xovi/extensions.d/qt-command-executor.so"
+chmod +x "$PAYLOAD/home/root/xovi/extensions.d/qt-command-executor.so"
+if [ -f "$BERGAMOT_BIN" ]; then
+  cp "$BERGAMOT_BIN" "$PAYLOAD/home/root/xovi/bergamot/bergamot"
+  chmod +x "$PAYLOAD/home/root/xovi/bergamot/bergamot"
+else
+  echo "警告: Bergamot binary 不存在: $BERGAMOT_BIN，本地翻译后端不可用" >&2
+fi
+if [ -d "$BERGAMOT_MODEL_DIR" ]; then
+  (cd "$BERGAMOT_MODEL_DIR" && tar -cf - .) | \
+    (cd "$PAYLOAD/home/root/xovi/bergamot/enzh" && tar -xf -)
+else
+  echo "警告: Bergamot 模型目录不存在: $BERGAMOT_MODEL_DIR，本地翻译后端不可用" >&2
 fi
 
 # /home/root/xovi/extensions.d/  librarian + xovi-message-broker
@@ -408,8 +551,10 @@ cp "$SCRIPT_DIR/vendor/extensions/xovi-message-broker-${EXT_ARCH}.so" \
 chmod +x "$PAYLOAD/home/root/xovi/extensions.d/"*.so
 
 # /usr/share/remarkable/xochitl/translations/  中文 qm
-[ -f "$DIST_DIR/reMarkable_zh_CN.qm" ] && \
-  cp "$DIST_DIR/reMarkable_zh_CN.qm" "$PAYLOAD/usr/share/remarkable/xochitl/translations/"
+for file in "${RMKIT_STATIC_FILES[@]}"; do
+  [ "$file" = "reMarkable_zh_CN.qm" ] || continue
+  [ -f "$DIST_DIR/$file" ] && cp "$DIST_DIR/$file" "$PAYLOAD/usr/share/remarkable/xochitl/translations/"
+done
 
 # /tmp/rmkit-cn-systemd-staging/  systemd unit + xochitl drop-in
 # (不直接放到 /etc, 因为 /etc 是 overlayfs, 必须设备端 bind-mount 双写)
@@ -427,14 +572,20 @@ echo "  payload 总量: $PAYLOAD_SIZE  $(find "$PAYLOAD" -type f | wc -l | tr -d
 echo ""
 echo "正在传输 (gzip 流式, 单次 SSH)..."
 START_TS=$(date +%s)
-tar -czf - --uid 0 --gid 0 -C "$PAYLOAD" . | ssh "$DEVICE_USER@$DEVICE_IP" '
+tar -czf - --uid 0 --gid 0 -C "$PAYLOAD" . | ssh "$DEVICE_TARGET" '
   set -e
   mount -o remount,rw / 2>/dev/null || true
   mkdir -p /home/root/.local/share/rmkit-cn/fonts \
-           /home/root/.local/share/rmkit-cn/screens \
-           /home/root/.local/share/fonts \
-           /usr/share/remarkable/xochitl/translations \
-           /home/root/xovi/exthome/qt-resource-rebuilder
+         /home/root/.local/share/rmkit-cn/screens \
+         /home/root/.local/share/fonts \
+         /home/root/shims \
+         /usr/share/remarkable/xochitl/translations \
+         /home/root/xovi/bergamot/enzh \
+         /home/root/xovi/exthome/appload \
+         /home/root/xovi/exthome/qt-resource-rebuilder \
+         /home/root/xovi/translate-text-layer
+  rm -rf /home/root/xovi/exthome/appload/koreader
+  rm -rf /home/root/xovi/exthome/qt-resource-rebuilder/chess
   # --no-same-owner 防止 tar 把 macOS 端打包时的 uid (xurx=502) 还原到设备文件,
   # 否则 /home/root owner 被改成 502 导致 sshd PAM/xochitl home 访问全卡死, 设备砖机
   cd / && tar -xzf - --no-same-owner --no-same-permissions
@@ -452,7 +603,7 @@ echo "  传输完成 (${ELAPSED}s)"
 # reenable.sh 末尾会 nohup 后台启动 fw-upgrade.sh, 后者读 .last_fw_version 判断是否重编 hashtab。
 # 如果文件不存在或值过旧, fw-upgrade.sh 会启动一个临时 LD_PRELOAD xochitl 写 hashtab,
 # 跟主 xochitl 进程或 systemctl restart xochitl 冲突, 反复 fail → bootloader 切 slot → 砖。
-ssh "$DEVICE_USER@$DEVICE_IP" "printf '%s' '$FW_VERSION' > /home/root/rmkit-cn/.last_fw_version"
+ssh "$DEVICE_TARGET" "printf '%s' '$FW_VERSION' > /home/root/rmkit-cn/.last_fw_version"
 echo "✓ .last_fw_version 已写入 ($FW_VERSION) — 防止 fw-upgrade.sh 误触发"
 
 # ─── 设备端: 6 阶段防砖部署 (2026-05-14 重写, 砖机预防) ───────────────
@@ -476,7 +627,7 @@ echo ""
 echo "正在配置系统服务 + 编译 + 启动..."
 # 把 ZZ_UNIT_HEADER 展平到单一字符串 (用 \n 字面表示换行), 设备端 printf %b 还原
 ZZ_HEADER_FLAT="$(printf '%s' "$ZZ_UNIT_HEADER" | awk 'BEGIN{ORS="\\n"} {print}' | sed 's/\\n$//')"
-ssh "$DEVICE_USER@$DEVICE_IP" "FW_VERSION='$FW_VERSION' ZZ_HEADER_FLAT='$ZZ_HEADER_FLAT' bash -s" <<'REMOTE_EOF'
+ssh "$DEVICE_TARGET" "FW_VERSION='$FW_VERSION' ZZ_HEADER_FLAT='$ZZ_HEADER_FLAT' bash -s" <<'REMOTE_EOF'
 set -e
 
 HASHTAB=/home/root/xovi/exthome/qt-resource-rebuilder/hashtab
@@ -486,6 +637,7 @@ QMD_TOOL=/home/root/rmkit-cn/bin/qmd-tool
 QMD_SRC=/home/root/rmkit-cn/qmd-src
 RMKIT_DIR=/home/root/rmkit-cn
 DROPIN=/etc/systemd/system/xochitl.service.d/zz-rmkit-cn.conf
+source $RMKIT_DIR/bin/qmd-artifacts.sh
 
 # 失败时回退: 删除任何已写入的 drop-in, 让 xochitl 走出厂默认启动
 abort_safe() {
@@ -595,8 +747,12 @@ for src in $QMD_SRC/*.qmd; do
   fi
 done
 # 静态资源
-[ -f $RMKIT_DIR/static/pinyin_interceptor.qmd ] && cp $RMKIT_DIR/static/pinyin_interceptor.qmd $DEPLOY/
-[ -f $RMKIT_DIR/static/zh_CN.rcc ] && cp $RMKIT_DIR/static/zh_CN.rcc $DEPLOY/
+for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+  [ -f "$RMKIT_DIR/static/$qmd" ] || continue
+  cp "$RMKIT_DIR/static/$qmd" "$DEPLOY/"
+  cp "$RMKIT_DIR/static/$qmd" "$CACHE/"
+done
+[ -f "$RMKIT_DIR/static/zh_CN.rcc" ] && cp "$RMKIT_DIR/static/zh_CN.rcc" "$DEPLOY/"
 
 # ───── 阶段 4: 验证 — 编译失败计数为 0 才能继续 ─────
 echo "  → 阶段 4/6: 验证 .qmd hash 命中..."
@@ -635,7 +791,7 @@ echo "    ✓ drop-in 写入 (tmpfs + ext4 lower 双写持久化)"
 
 # ───── 阶段 6: 启动 services + xochitl ─────
 echo "  → 阶段 6/6: 启动服务..."
-systemctl start rmkit-cn-upload.service rmkit-cn-ime-http.service 2>/dev/null || true
+systemctl restart rmkit-cn-upload.service rmkit-cn-ime-http.service 2>/dev/null || true
 [ -f /etc/systemd/system/rmkit-cn-version.path ] && systemctl start rmkit-cn-version.path 2>/dev/null || true
 
 # 阶段 2 stop 了 xochitl, 现在 start (drop-in 首次生效)
@@ -671,7 +827,7 @@ echo "  ✓ 部署完成"
 REMOTE_EOF
 
 # ─── 完成 ─────────────────────────────────────────────────────
-WIFI_IP=$(ssh "$DEVICE_USER@$DEVICE_IP" "ip route get 8.8.8.8 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print \$2}'" 2>/dev/null || echo "")
+WIFI_IP=$(ssh "$DEVICE_TARGET" "ip route get 8.8.8.8 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print \$2}'" 2>/dev/null || echo "")
 
 echo ""
 echo "✓ rmkit-cn 安装完成！"

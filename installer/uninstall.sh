@@ -10,11 +10,13 @@ SD_DIR="/etc/systemd/system/xochitl.service.d"
 
 echo "=== rmkit-cn 卸载 ==="
 
-systemctl stop rmkit-cn-ime.service 2>/dev/null || true
-systemctl disable rmkit-cn-ime.service 2>/dev/null || true
+systemctl stop rmkit-cn-upload.service rmkit-cn-version.path rmkit-cn-ime-http.service 2>/dev/null || true
+systemctl disable rmkit-cn-upload.service rmkit-cn-version.path rmkit-cn-ime-http.service 2>/dev/null || true
+systemctl stop rmkit-cn-ime.service rmkit-cn-ime-udev.service 2>/dev/null || true
+systemctl disable rmkit-cn-ime.service rmkit-cn-ime-udev.service 2>/dev/null || true
 
 # 清当前（overlay）/etc 上的文件
-rm -f /etc/systemd/system/rmkit-cn-ime.service
+rm -f /etc/systemd/system/rmkit-cn-*.service /etc/systemd/system/rmkit-cn-*.path
 rm -f "$SD_DIR/zz-rmkit-cn.conf" "$SD_DIR/rmkit-cn.conf" "$SD_DIR/xovi.conf"
 rmdir "$SD_DIR" 2>/dev/null || true
 
@@ -22,18 +24,21 @@ rmdir "$SD_DIR" 2>/dev/null || true
 mount -o remount,rw /
 mount --bind / /mnt 2>/dev/null || true
 if mountpoint -q /mnt 2>/dev/null; then
-  rm -f /mnt/etc/systemd/system/rmkit-cn-ime.service
+  rm -f /mnt/etc/systemd/system/rmkit-cn-*.service /mnt/etc/systemd/system/rmkit-cn-*.path
   rm -f /mnt/etc/systemd/system/xochitl.service.d/zz-rmkit-cn.conf \
         /mnt/etc/systemd/system/xochitl.service.d/rmkit-cn.conf \
         /mnt/etc/systemd/system/xochitl.service.d/xovi.conf
-  rm -f /mnt/etc/systemd/system/multi-user.target.wants/rmkit-cn-ime.service
+  rm -f /mnt/etc/systemd/system/multi-user.target.wants/rmkit-cn-*.service \
+        /mnt/etc/systemd/system/multi-user.target.wants/rmkit-cn-*.path
   rmdir /mnt/etc/systemd/system/xochitl.service.d 2>/dev/null || true
   sync
   umount /mnt
 fi
 
 rm -f "$QMD_DIR/pinyin_interceptor.qmd" "$QMD_DIR/zh_CN.rcc" "$QMD_DIR/hashtab"
-rm -f "$QMD_DIR/advanced_panel.qmd" "$QMD_DIR/language_zh_cn.qmd"
+rm -f "$QMD_DIR/advanced_panel.qmd" "$QMD_DIR/language_zh_cn.qmd" \
+      "$QMD_DIR/ai_text_button.qmd" "$QMD_DIR/glyph_selection_ai.qmd" \
+      "$QMD_DIR/translateSelection-3.27.qmd"
 
 # 清中文翻译 qm
 mount -o remount,rw / 2>/dev/null || true

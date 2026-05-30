@@ -27,6 +27,7 @@ func newTestServer(t *testing.T) (*Server, http.Handler, string) {
 		FontsDir:      filepath.Join(root, "fonts"),
 		ScreensDir:    filepath.Join(root, "screens"),
 		DocStagingDir: filepath.Join(root, "staging"),
+		AIConfigPath:  filepath.Join(root, "ai_config.json"),
 	}
 	if err := os.MkdirAll(cfg.StaticDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -38,7 +39,12 @@ func newTestServer(t *testing.T) (*Server, http.Handler, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return srv, srv.Routes(), root
+	routes := srv.Routes()
+	localRoutes := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "127.0.0.1:12345"
+		routes.ServeHTTP(w, r)
+	})
+	return srv, localRoutes, root
 }
 
 func multipartUpload(t *testing.T, fieldName, filename, contentType string, content []byte) (*bytes.Buffer, string) {
@@ -137,6 +143,79 @@ func TestUploadScreenWrongFormat(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 400 {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+}
+
+func TestGetAIConfigUsesCodexDefaults(t *testing.T) {
+	_, h, _ := newTestServer(t)
+	req := httptest.NewRequest("GET", "/ai-config", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+	var got aiConfigResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "codex" || got.URL != codexDefaultURL || got.Model != codexDefaultModel {
+		t.Fatalf("config=%+v", got)
+	}
+	if got.ReasoningEffort != codexDefaultReasoningEffort {
+		t.Fatalf("reasoning=%q want %q", got.ReasoningEffort, codexDefaultReasoningEffort)
+	}
+	if got.HasKey {
+		t.Fatal("default config unexpectedly reports a saved key")
+	}
+}
+
+func TestPutAIConfigPreservesSavedKeyAndReasoning(t *testing.T) {
+	_, h, root := newTestServer(t)
+	configPath := filepath.Join(root, "ai_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"kind":"openai","url":"https://example.test/v1","key":"saved-key","model":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	body := strings.NewReader(`{"kind":"codex","url":"","key":"","model":"","reasoning_effort":"high"}`)
+	req := httptest.NewRequest("PUT", "/ai-config", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+	var got aiConfigResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasKey {
+		t.Fatal("has_key=false want true")
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte("saved-key")) {
+		t.Fatalf("response leaked saved key: %s", rr.Body)
+	}
+	if got.URL != codexDefaultURL || got.Model != codexDefaultModel || got.ReasoningEffort != "high" {
+		t.Fatalf("config=%+v", got)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"key": "saved-key"`)) {
+		t.Fatalf("saved config did not preserve key: %s", data)
+	}
+}
+
+func TestPutAIConfigRejectsInvalidCodexReasoning(t *testing.T) {
+	_, h, _ := newTestServer(t)
+	body := strings.NewReader(`{"kind":"codex","url":"ws://127.0.0.1:48173","model":"gpt-5.5","reasoning_effort":"max"}`)
+	req := httptest.NewRequest("PUT", "/ai-config", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
 	}
 }
@@ -352,6 +431,87 @@ func TestQRPage(t *testing.T) {
 	body, _ := io.ReadAll(rr.Body)
 	if !bytes.Contains(body, []byte("上传到 reMarkable")) {
 		t.Errorf("qr.html content missing")
+	}
+}
+
+func TestLANAccessClosedByDefault(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	req := httptest.NewRequest("GET", "/qr", nil)
+	req.RemoteAddr = "192.168.1.50:5555"
+	rr := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+}
+
+func TestLANAccessOpenAndClose(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	h := srv.Routes()
+
+	openReq := httptest.NewRequest("POST", "/lan-access/open", nil)
+	openReq.RemoteAddr = "127.0.0.1:12345"
+	openRR := httptest.NewRecorder()
+	h.ServeHTTP(openRR, openReq)
+	if openRR.Code != http.StatusOK {
+		t.Fatalf("open status=%d body=%s", openRR.Code, openRR.Body)
+	}
+
+	remoteReq := httptest.NewRequest("GET", "/qr", nil)
+	remoteReq.RemoteAddr = "192.168.1.50:5555"
+	remoteRR := httptest.NewRecorder()
+	h.ServeHTTP(remoteRR, remoteReq)
+	if remoteRR.Code != http.StatusOK {
+		t.Fatalf("remote status=%d body=%s", remoteRR.Code, remoteRR.Body)
+	}
+
+	closeReq := httptest.NewRequest("POST", "/lan-access/close", nil)
+	closeReq.RemoteAddr = "127.0.0.1:12345"
+	closeRR := httptest.NewRecorder()
+	h.ServeHTTP(closeRR, closeReq)
+	if closeRR.Code != http.StatusOK {
+		t.Fatalf("close status=%d body=%s", closeRR.Code, closeRR.Body)
+	}
+
+	closedReq := httptest.NewRequest("GET", "/qr", nil)
+	closedReq.RemoteAddr = "192.168.1.50:5555"
+	closedRR := httptest.NewRecorder()
+	h.ServeHTTP(closedRR, closedReq)
+	if closedRR.Code != http.StatusForbidden {
+		t.Fatalf("closed status=%d body=%s", closedRR.Code, closedRR.Body)
+	}
+}
+
+func TestLANAccessOpenRejectsRemote(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	req := httptest.NewRequest("POST", "/lan-access/open", nil)
+	req.RemoteAddr = "192.168.1.50:5555"
+	rr := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+}
+
+func TestKoreaderEnvUsesInstalledShim(t *testing.T) {
+	env := koreaderEnv([]string{
+		"PATH=/usr/bin",
+		"LD_PRELOAD=/home/root/xovi/xovi.so",
+		"QTFB_SHIM_MODE=OLD",
+	})
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	if !strings.Contains(joined, "\nPATH=/usr/bin\n") {
+		t.Fatalf("PATH was not preserved: %q", env)
+	}
+	if strings.Contains(joined, "LD_PRELOAD=/home/root/xovi/xovi.so") ||
+		strings.Contains(joined, "QTFB_SHIM_MODE=OLD") {
+		t.Fatalf("old KOReader env leaked: %q", env)
+	}
+	if !strings.Contains(joined, "\nLD_PRELOAD=/home/root/shims/qtfb-shim.so\n") {
+		t.Fatalf("LD_PRELOAD does not point at installed shim: %q", env)
+	}
+	if !strings.Contains(joined, "\nQTFB_SHIM_MODE=N_RGB565\n") {
+		t.Fatalf("QTFB_SHIM_MODE missing: %q", env)
 	}
 }
 

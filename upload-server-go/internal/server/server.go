@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rmkit-cn/upload-server/internal/librarian"
@@ -29,6 +31,7 @@ const (
 	XochitlDir       = "/home/root/.local/share/remarkable/xochitl"
 	AIConfigPath     = "/home/root/.local/share/rmkit-cn/ai_config.json"
 	AIChatTimeout    = 90 * time.Second
+	LANAccessTTL     = 10 * time.Minute
 )
 
 var (
@@ -45,13 +48,19 @@ type Config struct {
 	DocStagingDir  string // /documents 上传暂存目录 (librarian 会从此处复制)
 	FontsActiveDir string // 字体激活符号链接目录 (~/.local/share/fonts)
 	XochitlConf    string // xochitl 配置路径 (~/.config/remarkable/xochitl.conf)
+	AIConfigPath   string // AI 配置文件路径
 }
 
 type Server struct {
-	cfg Config
+	cfg      Config
+	lanMu    sync.RWMutex
+	lanUntil time.Time
 }
 
 func New(cfg Config) (*Server, error) {
+	if cfg.AIConfigPath == "" {
+		cfg.AIConfigPath = AIConfigPath
+	}
 	for _, d := range []string{cfg.FontsDir, cfg.ScreensDir, cfg.DocStagingDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", d, err)
@@ -66,18 +75,17 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /qr", s.qrPage)
 	mux.HandleFunc("GET /qr-info", s.qrInfo)
 	mux.HandleFunc("GET /qr.png", s.qrPNG)
+	mux.HandleFunc("GET /lan-access/status", s.lanAccessStatus)
+	mux.HandleFunc("POST /lan-access/open", s.openLANAccess)
+	mux.HandleFunc("POST /lan-access/close", s.closeLANAccess)
 
 	mux.HandleFunc("GET /fonts", s.listFonts)
 	mux.HandleFunc("POST /fonts", s.uploadFont)
 	mux.HandleFunc("DELETE /fonts/{name}", s.deleteFont)
-	mux.HandleFunc("GET /fonts/active", s.activeFont)
-	mux.HandleFunc("POST /fonts/{name}/apply", s.applyFont)
 
 	mux.HandleFunc("GET /screens", s.listScreens)
 	mux.HandleFunc("POST /screens", s.uploadScreen)
 	mux.HandleFunc("DELETE /screens/{name}", s.deleteScreen)
-	mux.HandleFunc("GET /screens/active", s.activeScreen)
-	mux.HandleFunc("POST /screens/{name}/apply", s.applyScreen)
 	mux.HandleFunc("GET /screens/{name}/preview", s.previewScreen)
 
 	mux.HandleFunc("POST /documents", s.uploadDocument)
@@ -87,9 +95,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /ai-chat", s.aiChat)
 	mux.HandleFunc("POST /ai-page-chat", s.aiPageChat)
 	mux.HandleFunc("POST /ai-glyph-chat", s.aiGlyphChat)
-	mux.HandleFunc("POST /ai-glyph-paste", s.aiGlyphPaste)
 	mux.HandleFunc("POST /ai-glyph-handwrite", s.aiGlyphHandwrite)
-	mux.HandleFunc("POST /ai-glyph-tap", s.aiGlyphTap)
 
 	mux.HandleFunc("POST /apply", s.applyAll)
 
@@ -97,7 +103,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.cfg.StaticDir))))
 
-	return accessLog(mux)
+	return accessLog(s.accessGate(mux))
 }
 
 func accessLog(next http.Handler) http.Handler {
@@ -118,6 +124,81 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func httpError(w http.ResponseWriter, code int, detail string) {
 	writeJSON(w, code, map[string]string{"detail": detail})
+}
+
+func remoteIP(r *http.Request) net.IP {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return net.ParseIP(host)
+}
+
+func isLocalRequest(r *http.Request) bool {
+	ip := remoteIP(r)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Server) lanAccessOpenNow() bool {
+	s.lanMu.RLock()
+	defer s.lanMu.RUnlock()
+	return !s.lanUntil.IsZero() && time.Now().Before(s.lanUntil)
+}
+
+func (s *Server) accessGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLocalRequest(r) || s.lanAccessOpenNow() {
+			next.ServeHTTP(w, r)
+			return
+		}
+		httpError(w, http.StatusForbidden, "局域网访问未开启，请先在设备「高级 → 扫码上传」打开")
+	})
+}
+
+func (s *Server) openLANAccess(w http.ResponseWriter, r *http.Request) {
+	if !isLocalRequest(r) {
+		httpError(w, http.StatusForbidden, "仅允许设备本机开启局域网访问")
+		return
+	}
+	until := time.Now().Add(LANAccessTTL)
+	s.lanMu.Lock()
+	s.lanUntil = until
+	s.lanMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"open":       true,
+		"ttl_sec":    int(LANAccessTTL.Seconds()),
+		"until_unix": until.Unix(),
+	})
+}
+
+func (s *Server) closeLANAccess(w http.ResponseWriter, r *http.Request) {
+	if !isLocalRequest(r) {
+		httpError(w, http.StatusForbidden, "仅允许设备本机关闭局域网访问")
+		return
+	}
+	s.lanMu.Lock()
+	s.lanUntil = time.Time{}
+	s.lanMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"open": false})
+}
+
+func (s *Server) lanAccessStatus(w http.ResponseWriter, r *http.Request) {
+	if !isLocalRequest(r) {
+		httpError(w, http.StatusForbidden, "仅允许设备本机查看局域网访问状态")
+		return
+	}
+	s.lanMu.RLock()
+	until := s.lanUntil
+	s.lanMu.RUnlock()
+	remaining := int(time.Until(until).Seconds())
+	if until.IsZero() || remaining < 0 {
+		remaining = 0
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"open":       remaining > 0,
+		"ttl_sec":    remaining,
+		"until_unix": until.Unix(),
+	})
 }
 
 // safeJoin 防 path traversal: 只取 name 的 base, 校验拼接后仍在 base 下.
@@ -491,29 +572,47 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request) {
 // ---- AI 配置 ----
 
 type aiConfig struct {
-	Kind  string `json:"kind"`
-	URL   string `json:"url"`
-	Key   string `json:"key"`
-	Model string `json:"model"`
+	Kind            string `json:"kind"`
+	URL             string `json:"url"`
+	Key             string `json:"key"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort"`
 	// Thinking 控制 OpenAI 兼容协议下的 `enable_thinking` 字段 (Qwen3 等 hybrid thinking 模型).
 	// nil = 用模型默认 (不发字段); true/false = 显式开/关. 其它后端 (Anthropic / 非 thinking 模型) 忽略.
 	Thinking *bool `json:"enable_thinking,omitempty"`
 }
 
+type aiConfigResponse struct {
+	Kind            string `json:"kind"`
+	URL             string `json:"url"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	HasKey          bool   `json:"has_key"`
+	Thinking        *bool  `json:"enable_thinking,omitempty"`
+}
+
 func defaultAIConfig() aiConfig {
-	return aiConfig{Kind: "openai", URL: "https://api.openai.com/v1", Model: "gpt-4o-mini"}
+	return aiConfig{
+		Kind:            "codex",
+		URL:             codexDefaultURL,
+		Model:           codexDefaultModel,
+		ReasoningEffort: codexDefaultReasoningEffort,
+	}
+}
+
+func publicAIConfig(cfg aiConfig) aiConfigResponse {
+	return aiConfigResponse{
+		Kind:            cfg.Kind,
+		URL:             cfg.URL,
+		Model:           cfg.Model,
+		ReasoningEffort: cfg.ReasoningEffort,
+		HasKey:          cfg.Key != "",
+		Thinking:        cfg.Thinking,
+	}
 }
 
 func (s *Server) getAIConfig(w http.ResponseWriter, r *http.Request) {
-	cfg := defaultAIConfig()
-	data, err := os.ReadFile(AIConfigPath)
-	if err == nil {
-		var disk aiConfig
-		if json.Unmarshal(data, &disk) == nil {
-			cfg = disk
-		}
-	}
-	writeJSON(w, http.StatusOK, cfg)
+	writeJSON(w, http.StatusOK, publicAIConfig(s.readAIConfig()))
 }
 
 // ---- AI 调用 ----
@@ -532,14 +631,8 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := defaultAIConfig()
-	if data, err := os.ReadFile(AIConfigPath); err == nil {
-		var disk aiConfig
-		if json.Unmarshal(data, &disk) == nil {
-			cfg = disk
-		}
-	}
-	if cfg.Key == "" {
+	cfg := s.readAIConfig()
+	if !isCodexKind(cfg.Kind) && cfg.Key == "" {
 		httpError(w, http.StatusBadRequest, "未配置 API Key, 请先在「高级 → AI 设置」填写")
 		return
 	}
@@ -553,6 +646,12 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func callAI(cfg aiConfig, prompt string) (string, error) {
+	cfg = normalizeAIConfig(cfg)
+	if isCodexKind(cfg.Kind) {
+		ctx, cancel := context.WithTimeout(context.Background(), AIChatTimeout)
+		defer cancel()
+		return callCodex(ctx, cfg, prompt)
+	}
 	base := strings.TrimRight(cfg.URL, "/")
 	client := &http.Client{Timeout: AIChatTimeout}
 	if cfg.Kind == "anthropic" {
@@ -572,7 +671,10 @@ func callOpenAI(client *http.Client, base, key, model, prompt string, thinking *
 		payload["enable_thinking"] = *thinking
 	}
 	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", base+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", base+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("配置的 API URL 无效: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
@@ -603,7 +705,10 @@ func callAnthropic(client *http.Client, base, key, model, prompt string) (string
 		"max_tokens": 8192,
 		"messages":   []map[string]string{{"role": "user", "content": prompt}},
 	})
-	req, _ := http.NewRequest("POST", base+"/messages", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", base+"/messages", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("配置的 API URL 无效: %w", err)
+	}
 	req.Header.Set("x-api-key", key)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Content-Type", "application/json")
@@ -641,6 +746,10 @@ func callAnthropic(client *http.Client, base, key, model, prompt string) (string
 // callAIStream 流式调用 AI, 每个文本 delta 通过 onChunk 回调.
 // ctx 取消时立即终止. 失败返回 error, 成功且未取消时返回 nil.
 func callAIStream(ctx context.Context, cfg aiConfig, prompt string, onChunk func(string)) error {
+	cfg = normalizeAIConfig(cfg)
+	if isCodexKind(cfg.Kind) {
+		return callCodexStream(ctx, cfg, codexTextInput(prompt), onChunk)
+	}
 	base := strings.TrimRight(cfg.URL, "/")
 	client := &http.Client{} // 不设 Timeout: 流式期间连接一直保持
 	if cfg.Kind == "anthropic" {
@@ -661,7 +770,10 @@ func callOpenAIStream(ctx context.Context, client *http.Client, base, key, model
 		payload["enable_thinking"] = *thinking
 	}
 	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("配置的 API URL 无效: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -714,7 +826,10 @@ func callAnthropicStream(ctx context.Context, client *http.Client, base, key, mo
 		"stream":     true,
 		"messages":   []map[string]string{{"role": "user", "content": prompt}},
 	})
-	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/messages", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("配置的 API URL 无效: %w", err)
+	}
 	req.Header.Set("x-api-key", key)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Content-Type", "application/json")
@@ -773,9 +888,17 @@ func (s *Server) putAIConfig(w http.ResponseWriter, r *http.Request) {
 	in.Kind = strings.TrimSpace(in.Kind)
 	in.URL = strings.TrimSpace(in.URL)
 	in.Model = strings.TrimSpace(in.Model)
-	if in.Kind != "openai" && in.Kind != "anthropic" {
-		httpError(w, http.StatusBadRequest, "kind 必须是 openai 或 anthropic")
+	rawReasoningEffort := in.ReasoningEffort
+	in = normalizeAIConfig(in)
+	if in.Kind != "codex" && in.Kind != "openai" && in.Kind != "anthropic" {
+		httpError(w, http.StatusBadRequest, "kind 必须是 codex、openai 或 anthropic")
 		return
+	}
+	if isCodexKind(in.Kind) {
+		if _, ok := normalizeCodexReasoningEffort(rawReasoningEffort); !ok {
+			httpError(w, http.StatusBadRequest, "reasoning_effort 必须是 low、medium、high 或 extra high")
+			return
+		}
 	}
 	if in.URL == "" {
 		httpError(w, http.StatusBadRequest, "url 不能为空")
@@ -783,27 +906,27 @@ func (s *Server) putAIConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Key 为空时, 保留磁盘上原有 key (避免回填表单时把 key 清空)
 	if in.Key == "" {
-		if data, err := os.ReadFile(AIConfigPath); err == nil {
+		if data, err := os.ReadFile(s.cfg.AIConfigPath); err == nil {
 			var disk aiConfig
 			if json.Unmarshal(data, &disk) == nil {
 				in.Key = disk.Key
 			}
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(AIConfigPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.cfg.AIConfigPath), 0o755); err != nil {
 		httpError(w, http.StatusInternalServerError, "创建目录失败: "+err.Error())
 		return
 	}
 	body, _ := json.MarshalIndent(in, "", "  ")
-	tmp := AIConfigPath + ".tmp"
+	tmp := s.cfg.AIConfigPath + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		httpError(w, http.StatusInternalServerError, "写入失败: "+err.Error())
 		return
 	}
-	if err := os.Rename(tmp, AIConfigPath); err != nil {
+	if err := os.Rename(tmp, s.cfg.AIConfigPath); err != nil {
 		os.Remove(tmp)
 		httpError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, in)
+	writeJSON(w, http.StatusOK, publicAIConfig(in))
 }

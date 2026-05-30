@@ -45,14 +45,8 @@ func (s *Server) aiGlyphChat(w http.ResponseWriter, r *http.Request) {
 		in.PromptPrefix = "请识别以下手写内容并用中文回答。"
 	}
 
-	cfg := defaultAIConfig()
-	if data, err := os.ReadFile(AIConfigPath); err == nil {
-		var disk aiConfig
-		if json.Unmarshal(data, &disk) == nil {
-			cfg = disk
-		}
-	}
-	if cfg.Key == "" {
+	cfg := s.readAIConfig()
+	if !isCodexKind(cfg.Kind) && cfg.Key == "" {
 		httpError(w, http.StatusBadRequest, "未配置 API Key")
 		return
 	}
@@ -85,10 +79,20 @@ func (s *Server) aiGlyphChat(w http.ResponseWriter, r *http.Request) {
 	if screenshotErr == nil && imgData != nil {
 		// 裁剪选区
 		cropped := cropImage(imgData, int(in.SelX), int(in.SelY), int(in.SelW), int(in.SelH))
-		// 保存裁剪后的图片到 /tmp 供调试查看
-		if df, err := os.Create("/tmp/rmkit_glyph_crop.png"); err == nil {
-			png.Encode(df, cropped)
-			df.Close()
+		// 保存裁剪后的图片到 /tmp, Codex 本地后端通过 localImage 读取这张图。
+		cropPath := ""
+		if df, err := os.CreateTemp("", "rmkit-glyph-crop-*.png"); err == nil {
+			cropPath = df.Name()
+			if err := png.Encode(df, cropped); err != nil {
+				_ = df.Close()
+				_ = os.Remove(cropPath)
+				cropPath = ""
+			} else if err := df.Close(); err != nil {
+				_ = os.Remove(cropPath)
+				cropPath = ""
+			} else {
+				defer os.Remove(cropPath)
+			}
 		}
 		var buf bytes.Buffer
 		if pngErr := png.Encode(&buf, cropped); pngErr == nil {
@@ -106,7 +110,7 @@ func (s *Server) aiGlyphChat(w http.ResponseWriter, r *http.Request) {
 				"\n- 标点必须用中文全角:「。，？！：；（）」, 严禁用半角「. , ? ! : ; ( )」或破折号「-」「—」" +
 				"\n- 如果识别出的是一个不完整的问题或主题，按【任务指令】把它当作要回答/展开的主题处理，不要原样返回" +
 				"\n- 如果图片完全无法识别（一片噪声/空白/严重失真），明确说「图片识别失败，请重试」，不要编造内容"
-			err = callAIStreamWithImage(r.Context(), cfg, prompt, b64, func(chunk string) {
+			err = callAIStreamWithImage(r.Context(), cfg, prompt, b64, cropPath, func(chunk string) {
 				writeLine(map[string]string{"text": chunk})
 			})
 		} else {
@@ -129,8 +133,12 @@ func (s *Server) aiGlyphChat(w http.ResponseWriter, r *http.Request) {
 	writeLine(map[string]bool{"done": true})
 }
 
-// callAIStreamWithImage: 用 OpenAI 兼容格式发送图像+文字请求（复用现有 callOpenAIStream 逻辑）
-func callAIStreamWithImage(ctx context.Context, cfg aiConfig, prompt, imgBase64 string, onChunk func(string)) error {
+// callAIStreamWithImage: Codex 走本地 app-server localImage, 其它后端走 OpenAI 兼容图像格式。
+func callAIStreamWithImage(ctx context.Context, cfg aiConfig, prompt, imgBase64, imagePath string, onChunk func(string)) error {
+	cfg = normalizeAIConfig(cfg)
+	if isCodexKind(cfg.Kind) {
+		return callCodexStream(ctx, cfg, codexTextImageInput(prompt, imagePath), onChunk)
+	}
 	base := strings.TrimRight(cfg.URL, "/")
 	// 构建 OpenAI vision 格式的 content 数组
 	content := []map[string]any{
@@ -167,8 +175,8 @@ func callAIStreamWithImage(ctx context.Context, cfg aiConfig, prompt, imgBase64 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API 错误 %d: %s", resp.StatusCode, string(b))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		return fmt.Errorf("API 错误 %d: %s", resp.StatusCode, snippet(b))
 	}
 
 	// 解析 SSE 流（与 callOpenAIStream 相同）
@@ -219,36 +227,36 @@ func callAIStreamWithImage(ctx context.Context, cfg aiConfig, prompt, imgBase64 
 // ─── DRM 截图 ────────────────────────────────────────────────────────────────
 
 const (
-	drmIoctlBase              = 'd'
-	drmIoctlModeGetResources  = 0xC04064A0
-	drmIoctlModeGetCrtc       = 0xC06864A1
-	drmIoctlModeGetFB         = 0xC01464AD
-	drmIoctlModeMapDumb       = 0xC01064B3
-	drmIoctlModeGetFB2        = 0xC05464CE
+	drmIoctlBase             = 'd'
+	drmIoctlModeGetResources = 0xC04064A0
+	drmIoctlModeGetCrtc      = 0xC06864A1
+	drmIoctlModeGetFB        = 0xC01464AD
+	drmIoctlModeMapDumb      = 0xC01064B3
+	drmIoctlModeGetFB2       = 0xC05464CE
 )
 
 type drmModeResources struct {
-	FBIDPtr         uint64
-	CRTCIDPtr       uint64
-	ConnIDPtr       uint64
-	EncIDPtr        uint64
-	CountFBs        uint32
-	CountCRTCs      uint32
-	CountConns      uint32
-	CountEncs       uint32
-	MinW, MaxW      uint32
-	MinH, MaxH      uint32
+	FBIDPtr    uint64
+	CRTCIDPtr  uint64
+	ConnIDPtr  uint64
+	EncIDPtr   uint64
+	CountFBs   uint32
+	CountCRTCs uint32
+	CountConns uint32
+	CountEncs  uint32
+	MinW, MaxW uint32
+	MinH, MaxH uint32
 }
 
 type drmModeCrtc struct {
-	SetConnsPtr  uint64
-	CountConns   uint32
-	CRTCID       uint32
-	FBID         uint32
-	X, Y         uint32
-	GammaSize    uint32
-	ModeValid    uint32
-	Mode         [292]byte
+	SetConnsPtr uint64
+	CountConns  uint32
+	CRTCID      uint32
+	FBID        uint32
+	X, Y        uint32
+	GammaSize   uint32
+	ModeValid   uint32
+	Mode        [292]byte
 }
 
 type drmModeFBCmd struct {
@@ -352,7 +360,7 @@ func drmScreenshot() (image.Image, error) {
 				r5 := (hi >> 3) & 0x1F
 				g6 := ((hi & 0x7) << 3) | (lo >> 5)
 				b5 := lo & 0x1F
-				gray = uint8((int(r5)*8+int(g6)*4+int(b5)*8) / 3)
+				gray = uint8((int(r5)*8 + int(g6)*4 + int(b5)*8) / 3)
 			default:
 				// xRGB / BGRX: channel[1] is reasonable for grayscale
 				gray = data[off+1]
@@ -400,43 +408,12 @@ func max32(a, b uint32) uint32 {
 	return b
 }
 
-// /ai-glyph-paste
-//
-// 输入: {"text":"要插入的文字"}
-// 行为: 把文字写入 xclip/xsel 或直接用 xdotool type 注入到 xochitl
-// (如果 xdotool 不可用, 尝试写 /tmp/rmkit_paste.txt 并发送 Ctrl+V 按键事件)
-
-func (s *Server) aiGlyphPaste(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Text string `json:"text"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&in); err != nil {
-		httpError(w, http.StatusBadRequest, "JSON 解析失败: "+err.Error())
-		return
-	}
-	if in.Text == "" {
-		httpError(w, http.StatusBadRequest, "text 不能为空")
-		return
-	}
-
-	// 把文字写入临时文件，然后通过 xclip 写剪贴板
-	// RMPP 上没有 xclip，改用 xdotool type (如果有的话)
-	// 或者写 /proc/xochitl/fd 的 stdin (不可行)
-	// 最实用: 写到 /tmp/rmkit_ai_result.txt，让 xochitl QML 读
-	// 暂不使用 evdev（ESC 会导致记事本退出）
-	if err := os.WriteFile("/tmp/rmkit_ai_result.txt", []byte(in.Text), 0644); err != nil {
-		httpError(w, http.StatusInternalServerError, "写文件失败: "+err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"ok":true}`))
-}
-
 // /ai-glyph-handwrite
 //
 // 输入: {"text":"...","sel_x":x,"sel_y":y,"sel_w":w}
 // 行为: 在选区下方用 /dev/input/event2 模拟笔写出 text。
-//       sel_y 已经是选区底部 y 坐标（QML 端传过来时 +sel.height）
+//
+//	sel_y 已经是选区底部 y 坐标（QML 端传过来时 +sel.height）
 func (s *Server) aiGlyphHandwrite(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Text string  `json:"text"`
@@ -469,27 +446,6 @@ func (s *Server) aiGlyphHandwrite(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("[handwrite err] %v\n", err)
 		}
 	}()
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"ok":true}`))
-}
-
-// aiGlyphTap: 在 view 坐标 (sel_x, sel_y) 单击一次 — 让 xochitl 在 typingMode 下
-// 把光标移到 view 坐标对应的文档位置, 再 replaceComposeText 就能精确插入文字。
-// 复用手写已验证的 view 坐标精确性, 绕开 scene 坐标转换陷阱。
-func (s *Server) aiGlyphTap(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		SelX float64 `json:"sel_x"`
-		SelY float64 `json:"sel_y"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil {
-		httpError(w, http.StatusBadRequest, "JSON 解析失败: "+err.Error())
-		return
-	}
-	profile := handwriting.DetectProfile()
-	if err := handwriting.TapAt(profile, int(in.SelX), int(in.SelY)); err != nil {
-		httpError(w, http.StatusInternalServerError, "tap: "+err.Error())
-		return
-	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"ok":true}`))
 }

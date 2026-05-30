@@ -14,9 +14,8 @@ reMarkable 平板的中文化、AI、IME 与扩展工具集。
 - 🤖 **文本 AI**：选中文字 → 润色 / 翻译 / 总结 / 问答（OpenAI 兼容）
 - ✍️ **手写 AI**：选中手写笔迹 → 视觉识别 → AI 回答 → 文字插入 OR 模拟笔迹回写
 - 📥 **手机扫码上传**：reMarkable 网页二维码 → 手机推送 PDF/字体/壁纸 → 设备自动应用
-- 🎨 **高级面板**：字体管理、壁纸切换、自定义启动器、AI 配置
-- 🎮 **小游戏**：象棋、五子棋、华容道、跳棋
-- 📚 **KOReader 启动器**：通过 [appload](https://github.com/asivery/rm-appload) 集成
+- 🎨 **高级面板**：字体管理、壁纸切换、函数绘图、AI 配置
+- 📚 **KOReader 启动器**：通过 [appload](https://github.com/asivery/rm-appload) 集成，由 `install.sh` 从 `stage/koreader` 部署
 
 ---
 
@@ -38,8 +37,8 @@ reMarkable 平板的中文化、AI、IME 与扩展工具集。
 1. reMarkable 设备已开启 Developer Mode（**注意：这会清空设备所有数据**）
    - Settings → General → About → Copyrights → 最底部记录 SSH 密码
    - Settings → General → Software → Enable Developer mode
-2. 设备已 USB-C 连接电脑，能 `ssh root@10.11.99.1`
-3. **建议先跑一次 `ssh-copy-id root@10.11.99.1`**（输入上一步看到的密码）。脚本内部会发起 10+ 次 ssh/scp 调用，没配公钥的话每次都要重新输密码，体验很糟
+2. 设备已配置为能 `ssh remarkable`
+3. **建议先跑一次 `ssh-copy-id remarkable`**（输入上一步看到的密码）。脚本内部会发起 10+ 次 ssh/scp 调用，没配公钥的话每次都要重新输密码，体验很糟
 
 ### 推荐：下载 Release 完整包（无需 git / Go 工具链）
 
@@ -66,7 +65,7 @@ bash installer/install.sh
 1. 检测设备架构 + 固件版本
 2. 检查 xovi（缺失时自动解压 `vendor/xovi/xovi-{arch}.tar.gz` 部署）
 3. 编译 `qmd-src/*.qmd` 到对应固件 hashtab
-4. tar 流式推送 31MB payload（含 IME / AI / 字体 / 高级面板）
+4. tar 流式推送 payload（含 IME / AI / KOReader / 字体 / 高级面板）
 5. 写入 systemd unit + xochitl drop-in（**双写 ext4 lower 持久化**，含 wants symlink）
 6. 第一次启动：临时 `LD_PRELOAD xochitl` 生成 hashtab → 设备端在线编译 .qmd
 7. `systemctl restart xochitl` 让 LD_PRELOAD 立即生效
@@ -103,7 +102,7 @@ bash installer/install.sh --uninstall
 **方法 2：SSH 直接改**
 
 ```bash
-ssh root@10.11.99.1 'cat > /home/root/rmkit-cn/upload-server/ai-config.json' <<EOF
+ssh remarkable 'cat > /home/root/rmkit-cn/upload-server/ai-config.json' <<EOF
 {
   "kind": "openai",
   "url": "https://api.openai.com/v1",
@@ -111,7 +110,7 @@ ssh root@10.11.99.1 'cat > /home/root/rmkit-cn/upload-server/ai-config.json' <<E
   "model": "gpt-4o-mini"
 }
 EOF
-ssh root@10.11.99.1 'systemctl restart rmkit-cn-upload'
+ssh remarkable 'systemctl restart rmkit-cn-upload'
 ```
 
 ---
@@ -138,7 +137,7 @@ ssh root@10.11.99.1 'systemctl restart rmkit-cn-upload'
 │   ├── fw-upgrade.sh     固件升级触发的 qmd 重编
 │   └── diagnose.sh       预检脚本
 ├── qmd-src/              qmldiff 注入源代码
-│   ├── advanced_panel.qmd     高级面板（字体/AI/华容道/...）
+│   ├── advanced_panel.qmd     高级面板（字体/AI/函数绘图/...）
 │   ├── ai_text_button.qmd     文字选区 AI 按钮
 │   ├── glyph_selection_ai.qmd 手写选区 AI 按钮 + 笔迹模拟
 │   └── language_zh_cn.qmd     系统中文化
@@ -153,7 +152,7 @@ ssh root@10.11.99.1 'systemctl restart rmkit-cn-upload'
 │   └── static/                 Web UI（qr.html / index.html）
 ├── tools/qmd-tool/       qmd 编译 + hash 校验（Go）
 ├── systemd/              *.service / *.path
-├── assets/chess/         游戏图标资源
+├── assets/chess/         高级面板图标资源
 ├── vendor/
 │   ├── xovi/             上游 xovi tarball
 │   └── extensions/       librarian / xovi-message-broker

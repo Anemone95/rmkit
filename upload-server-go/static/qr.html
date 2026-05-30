@@ -118,6 +118,7 @@
     <div class="form-row">
       <label class="lbl">服务商预设</label>
       <select id="ai-preset">
+        <option value="codex">Codex (本机)</option>
         <option value="custom">自定义 (OpenAI 兼容)</option>
         <option value="deepseek">DeepSeek</option>
         <option value="kimi">Kimi (月之暗面)</option>
@@ -143,6 +144,15 @@
     <div class="form-row">
       <label class="lbl">模型</label>
       <input type="text" id="ai-model" placeholder="gpt-4o-mini" autocomplete="off">
+    </div>
+    <div class="form-row" id="ai-reasoning-row">
+      <label class="lbl">Reasoning</label>
+      <select id="ai-reasoning">
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+        <option value="xhigh">extra high</option>
+      </select>
     </div>
     <button class="save" id="ai-save">保存</button>
     <p class="hint">保存后到平板「高级 → AI 设置」点测试连接</p>
@@ -249,6 +259,7 @@
 
   // ─── AI 设置 ────────────────────────────────────────────────
   const PRESETS = {
+    codex:      { kind: 'codex',     url: 'ws://127.0.0.1:48173',                         model: 'gpt-5.5' },
     deepseek:   { kind: 'openai',    url: 'https://api.deepseek.com/v1',                          model: 'deepseek-chat' },
     kimi:       { kind: 'openai',    url: 'https://api.moonshot.cn/v1',                           model: 'moonshot-v1-8k' },
     qwen:       { kind: 'openai',    url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',    model: 'qwen-plus' },
@@ -262,12 +273,25 @@
   const aiUrl    = document.getElementById('ai-url');
   const aiKey    = document.getElementById('ai-key');
   const aiModel  = document.getElementById('ai-model');
+  const aiReasoning = document.getElementById('ai-reasoning');
   const aiSave   = document.getElementById('ai-save');
   const aiKeyToggle = document.getElementById('ai-key-toggle');
+  const aiUrlRow = aiUrl.closest('.form-row');
+  const aiKeyRow = aiKey.closest('.form-row');
+  const aiReasoningRow = document.getElementById('ai-reasoning-row');
 
   // currentKind: 跟踪从磁盘读出来的 kind, 切预设时同步更新.
   // 自定义预设不动 kind, 维持原值.
-  let currentKind = 'openai';
+  let currentKind = 'codex';
+
+  function refreshAIFields() {
+    const isCodex = currentKind === 'codex';
+    if (aiUrlRow) aiUrlRow.style.display = isCodex ? 'none' : '';
+    if (aiKeyRow) aiKeyRow.style.display = isCodex ? 'none' : '';
+    if (aiReasoningRow) aiReasoningRow.style.display = isCodex ? '' : 'none';
+    aiModel.placeholder = isCodex ? 'gpt-5.5' : 'gpt-4o-mini';
+    aiKey.placeholder = isCodex ? 'Codex 不需要 API Key' : (aiKey.dataset.saved ? '已保存 (留空保留)' : 'sk-...');
+  }
 
   aiKeyToggle.addEventListener('click', () => {
     if (aiKey.type === 'password') { aiKey.type = 'text'; aiKeyToggle.textContent = '隐藏'; }
@@ -276,10 +300,15 @@
 
   aiPreset.addEventListener('change', () => {
     const p = PRESETS[aiPreset.value];
-    if (!p) return; // custom: 不动
+    if (!p) {
+      if (currentKind === 'codex') currentKind = 'openai';
+      refreshAIFields();
+      return;
+    }
     aiUrl.value = p.url;
     aiModel.value = p.model;
     currentKind = p.kind;
+    refreshAIFields();
   });
 
   function loadAIConfig() {
@@ -289,15 +318,17 @@
       if (xhr.status !== 200) return;
       try {
         const j = JSON.parse(xhr.responseText);
-        currentKind  = j.kind  || 'openai';
+        currentKind  = j.kind  || 'codex';
         aiUrl.value  = j.url   || '';
         aiModel.value = j.model || '';
+        aiReasoning.value = j.reasoning_effort || 'low';
         // key 故意不回填, 避免在公开环境暴露; 留空保留原值
         aiKey.value = '';
-        aiKey.placeholder = j.key ? '已保存 (留空保留)' : 'sk-...';
+        aiKey.dataset.saved = j.has_key ? '1' : '';
         // 根据当前 url+model 命中哪个预设
         const hit = Object.entries(PRESETS).find(([_, v]) => v.url === j.url && v.kind === currentKind);
         aiPreset.value = hit ? hit[0] : 'custom';
+        refreshAIFields();
       } catch (_) {}
     };
     xhr.send();
@@ -311,6 +342,7 @@
       url:   aiUrl.value.trim(),
       key:   aiKey.value,        // 不 trim, 保留原始 key
       model: aiModel.value.trim(),
+      reasoning_effort: aiReasoning.value,
     });
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', '/ai-config');
@@ -339,6 +371,7 @@
     xhr.send(body);
   });
 
+  refreshAIFields();
   loadAIConfig();
 })();
 </script>

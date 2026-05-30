@@ -2,7 +2,7 @@
 Description=监听 reMarkable 固件版本变化
 
 [Path]
-PathChanged=/etc/remarkable/version
+PathChanged=/etc/version
 
 [Install]
 WantedBy=multi-user.target

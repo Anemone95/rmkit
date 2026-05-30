@@ -8,9 +8,9 @@
 //	    -hashtab 默认 ./tools/hashtab (跟 PC install.sh 同步设备 hashtab 后的位置);
 //	    设备端 OTA 时改成 /home/root/xovi/exthome/qt-resource-rebuilder/hashtab.
 //
-//	qmd-tool check [-hashtabs <dir>] [-qmd <dir>]
-//	    扫 <qmd> 下所有 *.qmd, 校验 hash 都在 <hashtabs>/hashtab-* 任一文件并集中.
-//	    -hashtabs 默认 ./tools/hashtabs, -qmd 默认 ./qmd.
+//	qmd-tool check [-hashtabs <dir>] [-qmd <dir>[,<dir>...]]
+//	    扫 qmd 目录下所有 *.qmd, 校验 hash 都在 <hashtabs>/hashtab-* 任一文件并集中.
+//	    -hashtabs 默认 ./tools/hashtabs, -qmd 默认 ./qmd,./dist.
 //	    退出码: 0 全部命中; 1 有孤儿 hash; 2 环境/路径问题.
 //
 // 此二进制无外部依赖 (纯标准库), 跨平台 cross-compile, 同时给 PC install.sh
@@ -21,12 +21,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "用法 (flag 必须在 positional 之前):")
 	fmt.Fprintln(os.Stderr, "  qmd-tool hash  [-hashtab <path>] <src.qmd>")
-	fmt.Fprintln(os.Stderr, "  qmd-tool check [-hashtabs <dir>] [-qmd <dir>]")
+	fmt.Fprintln(os.Stderr, "  qmd-tool check [-hashtabs <dir>] [-qmd <dir>[,<dir>...]]")
 }
 
 func main() {
@@ -80,16 +81,37 @@ func runHash(args []string) {
 func runCheck(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	hashtabs := fs.String("hashtabs", "tools/hashtabs", "hashtabs 目录 (含 hashtab-* 快照)")
-	qmd := fs.String("qmd", "qmd", "qmd 目录")
+	qmd := fs.String("qmd", "", "qmd 目录, 逗号分隔；默认 qmd,dist")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	bad, err := checkQMD(*hashtabs, *qmd)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	qmdDirs := []string{"qmd", "dist"}
+	if strings.TrimSpace(*qmd) != "" {
+		qmdDirs = nil
+		for _, dir := range strings.Split(*qmd, ",") {
+			dir = strings.TrimSpace(dir)
+			if dir != "" {
+				qmdDirs = append(qmdDirs, dir)
+			}
+		}
+		if len(qmdDirs) == 0 {
+			fmt.Fprintln(os.Stderr, "至少需要一个 qmd 目录")
+			os.Exit(2)
+		}
 	}
-	if bad > 0 {
+	totalBad := 0
+	for i, dir := range qmdDirs {
+		if i > 0 {
+			fmt.Println()
+		}
+		bad, err := checkQMD(*hashtabs, dir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		totalBad += bad
+	}
+	if totalBad > 0 {
 		os.Exit(1)
 	}
 }

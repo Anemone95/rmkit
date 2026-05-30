@@ -6,9 +6,7 @@
 ;   点其中一个 → 立即关菜单, 弹出底部预览面板, 后台 XHR 调 /ai-page-chat 流式拿 token.
 ;   面板里实时显示生成内容; 用户点 "插入" 时再走 IME 一次性 commit 到光标处, 点 "取消/删除" 直接关掉.
 ;
-; 整页方案: QML 层无法读取 selectedText / 整页文字 (只暴露 cursor/selection 坐标, 不暴露文字).
-;   所以走服务器端: Go 版 rmscene 扫 ~/.local/share/remarkable/xochitl 找 mtime 最新的 .rm,
-;   解析出 typed text plain string, 拼到用户的 prompt 后面调 AI.
+; 当前方案: QML 层直接把菜单动作拼成 prompt, 服务器端 /ai-page-chat 只负责流式转发给 AI.
 ;
 ; 预览面板设计:
 ;   - 尺寸: 黄金比例, width = parent.width * 0.618, height = parent.height * 0.382

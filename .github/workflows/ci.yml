@@ -124,7 +124,11 @@ jobs:
         run: |
           GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' \
             -o /tmp/upload-server-aarch64 ./cmd/upload-server
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' \
+            -o /tmp/text-layer-sidecar-aarch64 ./cmd/text-layer-sidecar
       - name: cross-compile armv7
         run: |
           GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' \
             -o /tmp/upload-server-armv7 ./cmd/upload-server
+          GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' \
+            -o /tmp/text-layer-sidecar-armv7 ./cmd/text-layer-sidecar

@@ -1,6 +1,14 @@
 #!/bin/bash
 # 固件升级后自动重编 qmd 并部署所有静态资源
 # 触发条件：rmkit-cn-version.path 监听到 /etc/version 变化 → rmkit-cn-version.service 调用本脚本
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [ -f "$SCRIPT_DIR/qmd-artifacts.sh" ]; then
+    # shellcheck source=installer/qmd-artifacts.sh
+    source "$SCRIPT_DIR/qmd-artifacts.sh"
+else
+    RMKIT_STATIC_QMDS=(pinyin_interceptor.qmd translateSelection-3.27.qmd)
+fi
+
 FW_NOW=$(cat /etc/version 2>/dev/null)
 FW_LAST=$(cat /home/root/rmkit-cn/.last_fw_version 2>/dev/null)
 HASHTAB=/home/root/xovi/exthome/qt-resource-rebuilder/hashtab
@@ -29,9 +37,11 @@ switch_qmd() {
 
 deploy_static() {
     echo "[fw-upgrade] 部署静态资源..."
-    # pinyin_interceptor.qmd + zh_CN.rcc → qt-resource-rebuilder
-    [ -f "$STATIC/pinyin_interceptor.qmd" ] && \
-        cp "$STATIC/pinyin_interceptor.qmd" "$QMD_DEPLOY/" && echo "[fw-upgrade] ✓ pinyin_interceptor.qmd"
+    for qmd in "${RMKIT_STATIC_QMDS[@]}"; do
+        [ -f "$STATIC/$qmd" ] || continue
+        cp "$STATIC/$qmd" "$QMD_DEPLOY/" && echo "[fw-upgrade] ✓ $qmd"
+        [ -d "$QMD_CACHE/$FW_NOW" ] && cp "$STATIC/$qmd" "$QMD_CACHE/$FW_NOW/"
+    done
     [ -f "$STATIC/zh_CN.rcc" ] && \
         cp "$STATIC/zh_CN.rcc" "$QMD_DEPLOY/" && echo "[fw-upgrade] ✓ zh_CN.rcc"
     # reMarkable_zh_CN.qm → 系统翻译目录（RMPP overlayfs: 写上层 tmpfs, 重启前有效）
@@ -66,7 +76,7 @@ QMLDIFF_HASHTAB_CREATE="$HASHTAB" \
 XPID=$!
 
 HASHTAB_FOUND=false
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
     if [ -f "$HASHTAB" ]; then
         MTIME=$(date +%s -r "$HASHTAB" 2>/dev/null || echo 0)
         SIZE=$(wc -c < "$HASHTAB" 2>/dev/null || echo 0)
