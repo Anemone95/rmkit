@@ -269,7 +269,7 @@ func (c *codexRPCClient) startThread(ctx context.Context, cfg aiConfig, ephemera
 		"sandbox":          "read-only",
 		"serviceName":      "rmkit_cn",
 		"ephemeral":        ephemeral,
-		"baseInstructions": "你是 reMarkable 本地 AI 助手。只回答用户问题，不运行命令，不修改文件，不解释你的系统环境。默认用中文，除非用户明确要求其它语言。",
+		"baseInstructions": "你是 reMarkable 本地 AI 助手。默认用中文，除非用户明确要求其它语言。",
 	}
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
@@ -313,7 +313,7 @@ func (c *codexRPCClient) resumeThread(ctx context.Context, cfg aiConfig, threadI
 		"cwd":              "/home/root",
 		"approvalPolicy":   "never",
 		"sandbox":          "read-only",
-		"baseInstructions": "你是 reMarkable 本地 AI 助手。只回答用户问题，不运行命令，不修改文件，不解释你的系统环境。默认用中文，除非用户明确要求其它语言。",
+		"baseInstructions": "你是 reMarkable 本地 AI 助手。默认用中文，除非用户明确要求其它语言。",
 	}
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
