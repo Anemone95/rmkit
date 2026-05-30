@@ -188,7 +188,7 @@ func (s *Server) callCodexDocumentStream(ctx context.Context, cfg aiConfig, docu
 	}
 
 	if newThread {
-		prompt = codexInitialDocumentPrompt(ctx, prompt, documentPath, shouldAttachDocumentText(prompt))
+		prompt = codexInitialDocumentPrompt(prompt, documentPath)
 	}
 	return client.startTurnAndStream(ctx, cfg, threadID, codexTextInput(prompt), onChunk)
 }
