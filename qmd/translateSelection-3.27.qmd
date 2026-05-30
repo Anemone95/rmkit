@@ -409,9 +409,17 @@ AFFECT [[11806562588218124596]]
 				xochitlTranslateTranslatedText = translated || "";
 				xochitlTranslateStatusText = statusText || "";
 				xochitlTranslateBusy = busy;
-				xochitlTranslateFollowupText = "";
+				xochitlTranslateClearFollowupInput();
 				xochitlTranslateShowOriginalText = showOriginal === false ? false : xochitlTranslateOriginalText.length > 0;
 				xochitlTranslatePopupVisible = true;
+			}
+
+			function xochitlTranslateClearFollowupInput() {
+				xochitlTranslateFollowupText = "";
+				try {
+					xochitlTranslateQuestionInput.text = "";
+				} catch (e0) {
+				}
 			}
 
 		function xochitlTranslateShellQuote(value) {
@@ -699,7 +707,7 @@ AFFECT [[11806562588218124596]]
 				return;
 			}
 			var prompt = xochitlTranslateBuildFollowupPrompt(question);
-			xochitlTranslateFollowupText = "";
+			xochitlTranslateClearFollowupInput();
 			xochitlTranslateShowOriginalText = false;
 			xochitlTranslateDebug("file:///tmp/xochitl-translate-command-debug.txt",
 				"ai ask question=" + question.slice(0, 240));
