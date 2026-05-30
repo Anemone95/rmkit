@@ -59,14 +59,6 @@ func normalizeCodexDocumentPathForDocument(documentID, path string) string {
 	return ""
 }
 
-func codexInitialDocumentPrompt(prompt, documentPath string) string {
-	documentPath = normalizeCodexDocumentPath(documentPath)
-	if documentPath == "" {
-		return prompt
-	}
-	return "@" + documentPath + "\n\n" + prompt
-}
-
 func (s *Server) codexThreadForDocument(documentID string) (codexThreadRecord, error) {
 	codexThreadStoreMu.Lock()
 	defer codexThreadStoreMu.Unlock()

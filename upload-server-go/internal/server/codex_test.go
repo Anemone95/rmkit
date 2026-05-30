@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -47,16 +48,46 @@ func TestNormalizeAIConfigCodexDefaultsReasoning(t *testing.T) {
 }
 
 func TestCodexInitialDocumentPrompt(t *testing.T) {
-	got := codexInitialDocumentPrompt("translate this", "/home/root/.local/share/remarkable/xochitl/doc-1.pdf")
+	got := codexInitialDocumentPrompt(context.Background(), "translate this", "/home/root/.local/share/remarkable/xochitl/doc-1.pdf", false)
 	want := "@/home/root/.local/share/remarkable/xochitl/doc-1.pdf\n\ntranslate this"
 	if got != want {
 		t.Fatalf("prompt=%q want %q", got, want)
 	}
-	if got := codexInitialDocumentPrompt("translate this", "/tmp/doc.pdf"); got != "translate this" {
+	if got := codexInitialDocumentPrompt(context.Background(), "translate this", "/tmp/doc.pdf", false); got != "translate this" {
 		t.Fatalf("unsafe path should be ignored, got %q", got)
 	}
 	if got := normalizeCodexDocumentPathForDocument("doc-1", "/home/root/.local/share/remarkable/xochitl/doc-2.pdf"); got != "" {
 		t.Fatalf("mismatched document path=%q want empty", got)
+	}
+}
+
+func TestCodexInitialDocumentPromptIncludesDocumentText(t *testing.T) {
+	old := codexDocumentTextExtractor
+	t.Cleanup(func() { codexDocumentTextExtractor = old })
+	codexDocumentTextExtractor = func(context.Context, string) (codexDocumentText, error) {
+		return codexDocumentText{Text: "Paper title\nImportant result.", Truncated: false}, nil
+	}
+
+	got := codexInitialDocumentPrompt(context.Background(),
+		"请你跟我总结这个论文内容",
+		"/home/root/.local/share/remarkable/xochitl/doc-1.pdf",
+		true)
+	if !strings.Contains(got, "@/home/root/.local/share/remarkable/xochitl/doc-1.pdf") {
+		t.Fatalf("prompt missing document path: %q", got)
+	}
+	if !strings.Contains(got, "<document_text path=\"/home/root/.local/share/remarkable/xochitl/doc-1.pdf\">") ||
+		!strings.Contains(got, "Paper title\nImportant result.") ||
+		!strings.HasSuffix(got, "请你跟我总结这个论文内容") {
+		t.Fatalf("prompt missing extracted text: %q", got)
+	}
+}
+
+func TestShouldAttachDocumentText(t *testing.T) {
+	if !shouldAttachDocumentText("请你跟我总结这个论文内容") {
+		t.Fatal("summary prompt should attach document text")
+	}
+	if shouldAttachDocumentText("请帮我翻译这句话为中文:hello") {
+		t.Fatal("selection translation should not attach whole document text")
 	}
 }
 
